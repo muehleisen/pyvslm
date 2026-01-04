@@ -6,8 +6,8 @@ import os
 # Add the parent directory to path so we can import the vslm package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from vslm.filters.weighting import WeightingFilter, SUPPORTED_FS
-from vslm.filters.ansi import OctaveFilterBank
+from vslm.filters.weighting_filters import WeightingFilter, SUPPORTED_FS
+from vslm.filters.octave_filters import OctaveFilterBank
 
 class TestWeightingFilter(unittest.TestCase):
     def setUp(self):
