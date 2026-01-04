@@ -1,4 +1,3 @@
-# python2/run_vslm.py
 import sys
 import os
 from PySide6.QtWidgets import QApplication
