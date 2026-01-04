@@ -4,10 +4,11 @@ import soundfile as sf
 import os
 import sys
 
-# Path Hack
+# Path Hack to allow importing from the parent directory
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from vslm.analysis_engine import StreamProcessor
+from vslm.constants import Weighting
 
 class TestAnalysisEngine(unittest.TestCase):
     
@@ -19,7 +20,7 @@ class TestAnalysisEngine(unittest.TestCase):
         
         t = np.linspace(0, self.duration, int(self.fs * self.duration), endpoint=False)
         
-        # FIX: Generate signal with RMS = 0.5 (Peak ~= 0.707)
+        # Generate signal with RMS = 0.5 (Peak ~= 0.707)
         # This fits safely within [-1.0, 1.0] to avoid clipping in the WAV file.
         # We will use cal_factor=2.0 later to simulate a 1.0 Pascal signal.
         self.signal_rms = 0.5
@@ -38,11 +39,12 @@ class TestAnalysisEngine(unittest.TestCase):
     def test_run_analysis_broadband(self):
         print("\n--- Testing Analysis Engine: Broadband ---")
         
-        # FIX: Use cal_factor=2.0 to restore the 0.5 RMS signal to 1.0 Pascal effective
+        # Use cal_factor=2.0 to restore the 0.5 RMS signal to 1.0 Pascal effective
         processor = StreamProcessor(self.test_file, cal_factor=2.0)
         
         # Run Analysis (100ms blocks, A-weighted)
-        results = list(processor.run_analysis(block_size_ms=100, weighting='A'))
+        # UPDATED: Use Weighting.A Enum
+        results = list(processor.run_analysis(block_size_ms=100, weighting=Weighting.A))
         
         self.assertEqual(len(results), 10, "Should yield exactly 10 blocks for 1s file")
         
@@ -58,11 +60,12 @@ class TestAnalysisEngine(unittest.TestCase):
     def test_run_analysis_bands(self):
         print("\n--- Testing Analysis Engine: Octave Bands ---")
         
-        # FIX: Use cal_factor=2.0 here too
+        # Use cal_factor=2.0 here too
         processor = StreamProcessor(self.test_file, cal_factor=2.0)
         
-        # Run with Octave Bands (Z-weighted)
-        results = list(processor.run_analysis(block_size_ms=100, weighting='Z', do_band_analysis=True))
+        # Run with Octave Bands (Z-weighted / Flat)
+        # UPDATED: Use Weighting.Z Enum
+        results = list(processor.run_analysis(block_size_ms=100, weighting=Weighting.Z, do_band_analysis=True))
         
         # Check Steady State (Block 5)
         result = results[5]
