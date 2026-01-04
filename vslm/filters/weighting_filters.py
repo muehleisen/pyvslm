@@ -4,7 +4,7 @@ import scipy.signal
 import scipy.optimize
 
 # Standard VSLM sampling rates (for validation)
-SUPPORTED_FS = [22050, 44100, 48000, 96000, 88200, 176400, 192000]
+SUPPORTED_FS = [22050, 44100, 48000, 96000, 192000]
 
 # ISO Preferred Frequencies for Optimization Targets
 ISO_FREQS = np.array([
