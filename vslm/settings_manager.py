@@ -40,6 +40,10 @@ class AppSettings(BaseModel):
     # Advanced Analysis
     band_filter_order: int = 24
     
+    # PSD Settings (Added)
+    psd_nfft: int = 4096
+    psd_window: str = "Hanning"
+    
     # Dose Settings
     current_dose_standard: str = 'NIOSH'
     dose_standards: Dict[str, DoseStandard] = Field(default_factory=lambda: {

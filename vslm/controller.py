@@ -14,8 +14,6 @@ class VSLMController(QObject):
     sig_analysis_error = Signal(str)
     sig_status_message = Signal(str)
     sig_export_finished = Signal()
-    
-    # NEW: Signal to update progress bar maximum correctly
     sig_total_blocks = Signal(int)
 
     def __init__(self):
@@ -63,6 +61,7 @@ class VSLMController(QObject):
     def run_analysis(self, mode_id: int):
         if not self.filepath: return
 
+        is_psd = (mode_id == 4)
         do_bands = (mode_id in [2, 3])
         band_res = 'third' if mode_id == 3 else 'octave'
         
@@ -75,6 +74,10 @@ class VSLMController(QObject):
         if self.worker and self.worker.isRunning():
             self.worker.stop()
         
+        # Grab PSD settings from settings object (populated by GUI)
+        psd_nfft = getattr(self.settings, 'psd_nfft', 4096)
+        psd_window = getattr(self.settings, 'psd_window', 'Hanning')
+        
         self.worker = AnalysisWorker(
             filepath=self.filepath,
             cal_factor=self.cal_factor,
@@ -84,12 +87,13 @@ class VSLMController(QObject):
             band_res=band_res,
             speed=speed_val,
             band_order=self.settings.band_filter_order,
-            ref_pressure=self.settings.ref_pressure
+            ref_pressure=self.settings.ref_pressure,
+            mode_is_psd=is_psd,
+            psd_nfft=psd_nfft,
+            psd_window=psd_window
         )
 
-        # Forward the true total blocks from worker to the UI
         self.worker.sig_total_blocks.connect(self.sig_total_blocks.emit)
-        
         self.worker.sig_progress.connect(self.sig_analysis_progress.emit)
         self.worker.sig_error.connect(self.sig_analysis_error.emit)
         self.worker.sig_finished.connect(self._on_worker_finished)
@@ -104,10 +108,15 @@ class VSLMController(QObject):
             self.sig_status_message.emit("Analysis stopped by user.")
 
     def _on_worker_finished(self, results):
-        if self.end_time:
-            filtered = [r for r in results if self.start_time <= r['time'] <= self.end_time]
-        else:
+        # Filtering only applies to time-series results.
+        # PSD results are singular and already computed over the file.
+        if results and isinstance(results[0], dict) and results[0].get('type') == 'psd':
             filtered = results
+        else:
+            if self.end_time:
+                filtered = [r for r in results if self.start_time <= r['time'] <= self.end_time]
+            else:
+                filtered = results
             
         self.last_results = filtered
         self.sig_analysis_finished.emit(filtered)

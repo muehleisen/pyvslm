@@ -1,9 +1,10 @@
 import numpy as np
 import soundfile as sf
+import scipy.signal
 from pathlib import Path
 from typing import Generator, Any
 
-from .filters.weighting_filters import WeightingFilter
+from .filters.weighting_filters import WeightingFilter, get_weighting_power_response
 from .filters.octave_filters import OctaveFilterBank
 from .constants import Weighting, ResponseSpeed, BandResolution
 
@@ -62,6 +63,82 @@ class StreamProcessor:
             self.duration = info.duration
         except Exception as e:
             raise ValueError(f"Could not read file info: {e}")
+
+    def calculate_psd(self, 
+                      nfft: int = 4096, 
+                      window_type: str = 'Hanning', 
+                      weighting: Weighting = Weighting.A
+                      ) -> Generator[dict[str, Any], None, None]:
+        """
+        Calculates PSD using Welch's method (averaging periodograms of chunks).
+        Applies frequency weighting in the frequency domain.
+        Yields progress integers, then finally yields the result dict.
+        """
+        win_map = {'Hanning': 'hann', 'Hamming': 'hamming', 'Flattop': 'flattop'}
+        scipy_window = win_map.get(window_type, 'hann')
+        
+        # Read in large chunks (e.g., 10 seconds) to update progress
+        chunk_size_sec = 10.0
+        chunk_samples = int(self.fs * chunk_size_sec)
+        
+        # Accumulators
+        pxx_sum = None
+        count = 0
+        freqs = None
+        
+        total_samples = int(self.duration * self.fs)
+        processed_samples = 0
+        
+        nperseg = nfft
+        noverlap = nfft // 2
+        
+        with sf.SoundFile(str(self.filepath)) as f:
+            for chunk in f.blocks(blocksize=chunk_samples, always_2d=False, fill_value=0.0):
+                if len(chunk) < nperseg:
+                    continue # Skip tail if too short for one FFT
+                
+                # Apply Calibration
+                chunk = chunk * self.cal_factor
+                if chunk.ndim > 1: chunk = np.mean(chunk, axis=1) # Mono mixdown
+                
+                # Compute Welch for this chunk
+                f_c, pxx_c = scipy.signal.welch(chunk, fs=self.fs, window=scipy_window,
+                                                nperseg=nperseg, noverlap=noverlap,
+                                                nfft=nfft, scaling='density')
+                
+                if pxx_sum is None:
+                    pxx_sum = pxx_c
+                    freqs = f_c
+                else:
+                    pxx_sum += pxx_c
+                
+                count += 1
+                processed_samples += len(chunk)
+                
+                # Yield progress (0-100)
+                progress = int(100 * processed_samples / total_samples)
+                yield progress
+
+        if pxx_sum is None or count == 0:
+             raise ValueError("Data too short for specified FFT size.")
+
+        # Average Pxx across all chunks
+        pxx_avg = pxx_sum / count
+        
+        # Apply Frequency Weighting using the filter module
+        # vslm.m logic: Pxx = Pxx * |H(f)|^2
+        w_response = get_weighting_power_response(freqs, weighting)
+        pxx_weighted = pxx_avg * w_response
+        
+        # Yield Final Result
+        yield {
+            'type': 'psd',
+            'freqs': freqs,
+            'pxx': pxx_weighted,
+            'nfft': nfft,
+            'window': window_type,
+            'weighting': weighting
+        }
         
     def run_analysis(self, 
                      block_size_ms: float = 100.0, 

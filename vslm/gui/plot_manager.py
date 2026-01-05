@@ -44,6 +44,12 @@ class ResultPlotter:
                         figure, results, weighting, is_third, ref_pressure,
                         autoscale, ymin, ymax
                     )
+                case 4: # PSD Mode (New)
+                    # results[0] is the result dict
+                    ResultPlotter._plot_psd(
+                        figure, results[0], ref_pressure, 
+                        autoscale, ymin, ymax
+                    )
         except Exception as e:
             ax = figure.add_subplot(111)
             ax.text(0.5, 0.5, f"Plot Error:\n{str(e)}", ha='center', va='center', color='red')
@@ -93,11 +99,6 @@ class ResultPlotter:
         ax2.text(0.5, 0.95, f"Overall LEQ: {stats.overall:.1f} dB", 
                  ha='center', fontsize=14, fontweight='bold', color='blue')
         
-        # ax2.text(col1, 0.80, f"Lmax: {stats.max:.1f} dB")
-        # ax2.text(col1, 0.65, f"Lmin: {stats.min:.1f} dB")
-        # ax2.text(col1, 0.50, f"L10: {stats.ln[10]:.1f} dB")
-        # ax2.text(col1, 0.35, f"L50: {stats.ln[50]:.1f} dB")
-        # ax2.text(col1, 0.20, f"L90: {stats.ln[90]:.1f} dB")
         ax2.text(col1, 0.60, f"Lmax: {stats.max:.1f} dB")
         ax2.text(col1, 0.50, f"Lmin: {stats.min:.1f} dB")
         ax2.text(col1, 0.40, f"L10: {stats.ln[10]:.1f} dB")
@@ -170,6 +171,38 @@ class ResultPlotter:
         ax.set_title(f"Average Spectrum ({weighting}-weighted)")
         ax.set_ylabel("Level (dB)")
         ax.grid(axis='y')
+        
+        if not autoscale:
+            ax.set_ylim(ymin, ymax)
+        else:
+            ax.autoscale(axis='y')
+
+    @staticmethod
+    def _plot_psd(fig, data, ref_pressure, autoscale, ymin, ymax):
+        """Plots Power Spectral Density from calculate_psd results."""
+        ax = fig.add_subplot(1, 1, 1)
+        
+        freqs = data['freqs']
+        pxx = data['pxx']
+        nfft = data['nfft']
+        window = data['window']
+        weighting = data.get('weighting', 'Z')
+        
+        # Convert to dB/Hz
+        # pxx is in Pa^2/Hz. Convert to dB re 20uPa.
+        lpxx = 10 * np.log10(pxx / (ref_pressure**2) + 1e-30)
+        
+        # Handle Dynamic Range clamping like vslm.m
+        lp_max = np.max(lpxx)
+        lpxx_clamped = np.maximum(lpxx, lp_max - 60)
+        
+        ax.semilogx(freqs, lpxx_clamped)
+        
+        ax.set_title(f"Power Spectral Density ({nfft} pt FFT, {window} window, {weighting}-weighted)")
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("Pxx (dB/Hz)")
+        ax.grid(True, which="both", ls="-", alpha=0.5)
+        ax.set_xlim(left=freqs[1]) # Avoid 0 Hz in log plot
         
         if not autoscale:
             ax.set_ylim(ymin, ymax)

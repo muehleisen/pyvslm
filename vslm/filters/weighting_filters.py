@@ -42,6 +42,29 @@ def _get_ideal_response(freqs, w_type):
         
     return 20 * np.log10(gain / (nr/dr))
 
+def get_weighting_power_response(freqs, w_type):
+    """
+    Returns the frequency weighting power factor (magnitude squared) |H(f)|^2.
+    Used for frequency-domain weighting (e.g., PSD).
+    
+    Args:
+        freqs (np.ndarray): Array of frequencies.
+        w_type (str): Weighting type ('A', 'C', 'Z').
+    
+    Returns:
+        np.ndarray: Linear power gain factor.
+    """
+    wt = w_type.upper()
+    if wt in ['Z', 'FLAT', 'NONE']:
+        return np.ones_like(freqs, dtype=float)
+        
+    # Get dB response
+    db_resp = _get_ideal_response(freqs, wt)
+    
+    # Convert dB to linear magnitude squared (Power gain)
+    # dB = 10 * log10(|H|^2) -> |H|^2 = 10^(dB/10)
+    return 10.0**(db_resp / 10.0)
+
 def _design_parametric_sos(f0, Q, gain_db, fs):
     """Generic Parametric EQ for fine-tuning."""
     if f0 <= 0 or f0 >= fs/2: return np.array([1., 0., 0., 1., 0., 0.])

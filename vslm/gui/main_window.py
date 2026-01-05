@@ -1,9 +1,10 @@
 import sys
 from pathlib import Path
+import soundfile as sf # Added for reliable info retrieval
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QPushButton, QLabel, QGroupBox, 
                                QFileDialog, QMessageBox, QFrame, QButtonGroup, 
-                               QRadioButton, QProgressBar, QComboBox)
+                               QRadioButton, QProgressBar, QComboBox, QGridLayout)
 from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtCore import QUrl, Slot
 
@@ -12,7 +13,7 @@ from .calibration_dialog import CalibrationDialog
 from .about_dialog import AboutDialog 
 from .plot_widget import MatplotlibWidget
 from .plot_manager import ResultPlotter
-from ..constants import LEQ_INTERVAL_MAP
+from ..constants import LEQ_INTERVAL_MAP, AnalysisMode
 from ..controller import VSLMController
 
 
@@ -38,7 +39,7 @@ class MainWindow(QMainWindow):
         self.controller.sig_analysis_started.connect(self.on_analysis_started_ui)
         self.controller.sig_analysis_progress.connect(self.progress.setValue)
         
-        # NEW: Connect the dynamic total blocks signal to the progress bar max
+        # Connect the dynamic total blocks signal to the progress bar max
         self.controller.sig_total_blocks.connect(self.progress.setMaximum)
         
         self.controller.sig_analysis_finished.connect(self.on_analysis_finished_ui)
@@ -95,28 +96,47 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         self.left_panel = left_panel 
         
+        # --- 1. File & Selection Group (Compact Row) ---
         grp_file = QGroupBox("File & Selection")
         layout_file = QVBoxLayout()
-        self.btn_load = QPushButton("Load WAV File")
+        
+        # Horizontal Layout for Buttons
+        layout_btns = QHBoxLayout()
+        layout_btns.setSpacing(5) 
+        layout_btns.setContentsMargins(0, 0, 0, 0)
+
+        # Load Button
+        self.btn_load = QPushButton("Load\nWav")
+        self.btn_load.setMinimumHeight(45)
         self.btn_load.clicked.connect(self.on_btn_load_click)
-        self.btn_select = QPushButton("Select File Section")
+        layout_btns.addWidget(self.btn_load)
+
+        # Select Button
+        self.btn_select = QPushButton("Select\nSection")
+        self.btn_select.setMinimumHeight(45)
         self.btn_select.clicked.connect(self.on_select_section)
         self.btn_select.setEnabled(False)
-        self.btn_cal = QPushButton("Calibrate...")
+        layout_btns.addWidget(self.btn_select)
+
+        # Calibrate Button
+        self.btn_cal = QPushButton("Calibrate")
+        self.btn_cal.setMinimumHeight(45)
         self.btn_cal.clicked.connect(self.on_calibrate)
         self.btn_cal.setStyleSheet("background-color: #f3f4f6;")
-        
-        self.lbl_info = QLabel("No File Loaded")
+        layout_btns.addWidget(self.btn_cal)
+
+        layout_file.addLayout(layout_btns)
+
+        # Info Label
+        self.lbl_info = QLabel() # Text set by _update_file_label_text initially
         self.lbl_info.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
-        
-        layout_file.addWidget(self.btn_load)
-        layout_file.addWidget(self.btn_select)
-        layout_file.addWidget(self.btn_cal) 
         layout_file.addWidget(QLabel("File Info"))
         layout_file.addWidget(self.lbl_info)
+        
         grp_file.setLayout(layout_file)
         left_layout.addWidget(grp_file)
         
+        # --- 2. Weighting Group ---
         grp_weight = QGroupBox("Weighting")
         layout_weight = QHBoxLayout()
         self.bg_weight = QButtonGroup()
@@ -127,6 +147,7 @@ class MainWindow(QMainWindow):
         grp_weight.setLayout(layout_weight)
         left_layout.addWidget(grp_weight)
         
+        # --- 3. Speed Group ---
         grp_speed = QGroupBox("Speed (Lp Mode)")
         layout_speed = QHBoxLayout()
         self.bg_speed = QButtonGroup()
@@ -137,29 +158,66 @@ class MainWindow(QMainWindow):
         grp_speed.setLayout(layout_speed)
         left_layout.addWidget(grp_speed)
         
+        # --- 4. Analysis Mode Group ---
         grp_mode = QGroupBox("Analysis Mode")
         layout_mode = QVBoxLayout()
         self.bg_mode = QButtonGroup()
-        modes = ["Level vs Time (Lp)", "LEQ Analysis", "Octave Bands", "1/3 Octave Bands"]
+        
+        modes = ["Level vs Time (Lp)", "LEQ Analysis", "Octave Bands", "1/3 Octave Bands", "Power Spectral Density"]
         for i, m in enumerate(modes):
             rb = QRadioButton(m)
             self.bg_mode.addButton(rb, i)
             layout_mode.addWidget(rb)
+
+        # Placeholder space for future mode
+        layout_mode.addSpacing(25) 
+        
+        self.bg_mode.idToggled.connect(self.on_mode_changed)
         grp_mode.setLayout(layout_mode)
         left_layout.addWidget(grp_mode)
         
-        grp_leq = QGroupBox("LEQ Settings")
-        layout_leq = QHBoxLayout()
+        # --- 5. LEQ Settings Group (Modified to Vertical) ---
+        self.grp_leq = QGroupBox("LEQ Settings")
+        layout_leq = QVBoxLayout() 
+        layout_leq.setContentsMargins(5, 5, 5, 5) 
+        layout_leq.setSpacing(2) 
+        
         layout_leq.addWidget(QLabel("Plot Interval:"))
         self.combo_leq_int = QComboBox()
         for key, (label, _) in LEQ_INTERVAL_MAP.items():
             self.combo_leq_int.addItem(label, key)
         layout_leq.addWidget(self.combo_leq_int)
-        grp_leq.setLayout(layout_leq)
-        left_layout.addWidget(grp_leq)
         
-        left_layout.addStretch()
+        self.grp_leq.setLayout(layout_leq)
+        left_layout.addWidget(self.grp_leq)
         
+        # --- 6. PSD Settings Group (Compact Grid) ---
+        self.grp_psd = QGroupBox("PSD Settings")
+        layout_psd = QGridLayout()
+        layout_psd.setContentsMargins(5, 5, 5, 5) 
+        layout_psd.setVerticalSpacing(2)
+        
+        # Left Column: FFT Size
+        layout_psd.addWidget(QLabel("FFT Size:"), 0, 0)
+        self.combo_psd_nfft = QComboBox()
+        self.combo_psd_nfft.addItems(["256", "512", "1024", "2048", "4096", "8192", "16384"])
+        self.combo_psd_nfft.setCurrentText("4096")
+        layout_psd.addWidget(self.combo_psd_nfft, 1, 0)
+        
+        # Right Column: Window
+        layout_psd.addWidget(QLabel("Window:"), 0, 1)
+        self.combo_psd_window = QComboBox()
+        self.combo_psd_window.addItems(["Hanning", "Hamming", "Flattop"])
+        layout_psd.addWidget(self.combo_psd_window, 1, 1)
+        
+        self.grp_psd.setLayout(layout_psd)
+        left_layout.addWidget(self.grp_psd)
+        self.grp_psd.hide() # Hidden by default
+        
+        # Fixed spacing to separate settings from the analyze button
+        left_layout.addSpacing(20)
+        
+        # --- Analyze Button & Progress ---
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         left_layout.addWidget(self.progress)
@@ -170,8 +228,12 @@ class MainWindow(QMainWindow):
         self.btn_analyze.setEnabled(False)
         left_layout.addWidget(self.btn_analyze)
         
+        # Add stretch at the very end
+        left_layout.addStretch()
+
         main_layout.addWidget(left_panel)
         
+        # --- Right Panel (Plot) ---
         self.plot_panel = MatplotlibWidget()
         self.plot_panel.sig_scaling_changed.connect(self.on_scaling_changed)
         main_layout.addWidget(self.plot_panel, stretch=1)
@@ -199,6 +261,12 @@ class MainWindow(QMainWindow):
         self.bg_mode.button(settings.analysis_mode_index).setChecked(True)
         self.combo_leq_int.setCurrentIndex(settings.leq_interval_index)
         
+        # Load PSD settings
+        if hasattr(settings, 'psd_nfft'):
+             self.combo_psd_nfft.setCurrentText(str(settings.psd_nfft))
+        if hasattr(settings, 'psd_window'):
+             self.combo_psd_window.setCurrentText(settings.psd_window)
+        
         self.plot_panel.set_plot_settings(
             settings.plot_autoscale,
             settings.plot_ymin,
@@ -219,6 +287,18 @@ class MainWindow(QMainWindow):
         
         self.controller.settings.analysis_mode_index = self.bg_mode.checkedId()
         self.controller.settings.leq_interval_index = self.combo_leq_int.currentIndex()
+        
+        # Save PSD settings
+        self.controller.settings.psd_nfft = int(self.combo_psd_nfft.currentText())
+        self.controller.settings.psd_window = self.combo_psd_window.currentText()
+
+    def on_mode_changed(self, mode_id, checked):
+        if not checked: return
+        
+        # Mode 4 is PSD
+        is_psd = (mode_id == 4)
+        self.grp_psd.setVisible(is_psd)
+        self.grp_leq.setVisible(not is_psd)
 
     def on_btn_load_click(self):
         start_dir = self.controller.settings.last_directory
@@ -313,17 +393,32 @@ class MainWindow(QMainWindow):
         self._update_file_label_text(info)
 
     def _update_file_label_text(self, info=None):
-        if not self.controller.filepath:
-            self.lbl_info.setText(f"No File Loaded\nCal Factor: {self.controller.cal_factor:.4f}")
-            return
+        fname = "None"
+        if self.controller.filepath:
+             fname = self.controller.filepath.name
 
-        txt = (f"File: {self.controller.filepath.name}\n"
-               f"Cal Factor: {self.controller.cal_factor:.4f}")
+        cal = f"{self.controller.cal_factor:.4f}"
         
-        if info:
-             txt += f"\nFs: {info.samplerate} Hz\nDur: {info.duration:.1f} s"
-        elif self.controller.end_time:
-             txt += f"\nDur: {self.controller.end_time:.1f} s"
+        fs_str = ""
+        dur_str = ""
+        
+        if self.controller.filepath:
+            # Attempt to re-read info if not provided (e.g. after cal dialog)
+            if info is None:
+                try:
+                    info = sf.info(str(self.controller.filepath))
+                except Exception:
+                    pass
+            
+            if info:
+                fs_str = f"{info.samplerate} Hz"
+                dur_str = f"{info.duration:.2f} s"
+        
+        # Always 4 lines
+        txt = (f"File: {fname}\n"
+               f"Cal Factor: {cal}\n"
+               f"Fs: {fs_str}\n"
+               f"Dur: {dur_str}")
              
         self.lbl_info.setText(txt)
 
@@ -343,7 +438,6 @@ class MainWindow(QMainWindow):
         self.btn_analyze.setStyleSheet("background-color: #dbeafe;")
         self.btn_analyze.setEnabled(True)
         
-        # FIX: Clear progress bar when done
         self.progress.setValue(0)
         
         self.menu_export.setEnabled(True)
