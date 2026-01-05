@@ -1,3 +1,4 @@
+# ... (Imports unchanged) ...
 import traceback
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
@@ -7,6 +8,7 @@ from .result_exporter import ResultsExporter
 from .constants import Weighting, ResponseSpeed, LEQ_INTERVAL_MAP
 
 class VSLMController(QObject):
+    # ... (Signals and Init unchanged) ...
     sig_file_loaded = Signal(object, object)
     sig_analysis_started = Signal(str)
     sig_analysis_progress = Signal(int)
@@ -20,29 +22,25 @@ class VSLMController(QObject):
         super().__init__()
         self.settings_mgr = SettingsManager()
         self.settings = self.settings_mgr.load()
-        
         self.filepath: Path | None = None
         self.start_time: float = 0.0
         self.end_time: float | None = None
-        
         self.last_results: list = []
         self.worker: AnalysisWorker | None = None
         self.cal_factor = self.settings.calibration_factor
-        
         self.total_blocks_estimate = 100
 
+    # ... (load_file, update_calibration, set_analysis_range unchanged) ...
     def load_file(self, filepath: str):
         path = Path(filepath)
         try:
             from soundfile import info
             inf = info(str(path))
-            
             self.filepath = path
             self.settings.last_directory = str(path.parent)
             self.start_time = 0.0
             self.end_time = inf.duration
             self.last_results = []
-            
             self.sig_file_loaded.emit(path, inf)
             self.sig_status_message.emit("File loaded successfully.")
         except Exception as e:
@@ -61,33 +59,42 @@ class VSLMController(QObject):
     def run_analysis(self, mode_id: int):
         if not self.filepath: return
 
-        # Mode IDs: 4=PSD, 5=Spectrogram (Assuming 5 based on list index in GUI)
+        is_lp = (mode_id == 0)
         is_psd = (mode_id == 4)
         is_spec = (mode_id == 5)
         
         do_bands = (mode_id in [2, 3])
         band_res = 'third' if mode_id == 3 else 'octave'
-        
         w = self.settings.weighting
         weighting_val = w.value if hasattr(w, 'value') else w
-        
         s = self.settings.speed
         speed_val = s.value if hasattr(s, 'value') else s
         
-        if self.worker and self.worker.isRunning():
-            self.worker.stop()
+        if self.worker and self.worker.isRunning(): self.worker.stop()
         
-        # Grab settings
+        calc_block_ms = self.settings.block_size_ms 
+        if is_lp:
+            try:
+                keys = list(LEQ_INTERVAL_MAP.keys())
+                idx = self.settings.lp_interval_index
+                if 0 <= idx < len(keys):
+                    key = keys[idx]
+                    interval_sec = LEQ_INTERVAL_MAP[key][1]
+                    calc_block_ms = interval_sec * 1000.0
+            except Exception as e:
+                print(f"Error setting Lp interval: {e}, using default.")
+                calc_block_ms = 100.0
+
         psd_nfft = getattr(self.settings, 'psd_nfft', 4096)
         psd_window = getattr(self.settings, 'psd_window', 'Hanning')
-        
         spec_nfft = getattr(self.settings, 'spec_nfft', 512)
         spec_dt = getattr(self.settings, 'spec_dt', 1.0)
-        
+        spec_window = getattr(self.settings, 'spec_window', 'Hamming') # <--- Retrieve Setting
+
         self.worker = AnalysisWorker(
             filepath=self.filepath,
             cal_factor=self.cal_factor,
-            block_size_ms=self.settings.block_size_ms,
+            block_size_ms=calc_block_ms,
             weighting=weighting_val,
             do_bands=do_bands,
             band_res=band_res,
@@ -99,17 +106,18 @@ class VSLMController(QObject):
             psd_window=psd_window,
             mode_is_spec=is_spec,
             spec_nfft=spec_nfft,
-            spec_dt=spec_dt
+            spec_dt=spec_dt,
+            spec_window=spec_window # <--- Pass Setting
         )
 
         self.worker.sig_total_blocks.connect(self.sig_total_blocks.emit)
         self.worker.sig_progress.connect(self.sig_analysis_progress.emit)
         self.worker.sig_error.connect(self.sig_analysis_error.emit)
         self.worker.sig_finished.connect(self._on_worker_finished)
-        
         self.worker.start()
         self.sig_analysis_started.emit(str(speed_val))
 
+    # ... (Rest unchanged) ...
     def stop_analysis(self):
         if self.worker:
             self.worker.stop()
@@ -117,51 +125,31 @@ class VSLMController(QObject):
             self.sig_status_message.emit("Analysis stopped by user.")
 
     def _on_worker_finished(self, results):
-        # Filtering only applies to time-series results.
-        # PSD and Spectrogram results are singular objects
         if results and isinstance(results[0], dict) and results[0].get('type') in ['psd', 'spectrogram']:
             filtered = results
         else:
-            if self.end_time:
-                filtered = [r for r in results if self.start_time <= r['time'] <= self.end_time]
-            else:
-                filtered = results
-            
+            if self.end_time: filtered = [r for r in results if self.start_time <= r['time'] <= self.end_time]
+            else: filtered = results
         self.last_results = filtered
         self.sig_analysis_finished.emit(filtered)
         self.sig_status_message.emit("Analysis Complete.")
 
     def export_results(self, path: Path, mode_id: int, leq_interval_key):
         if not self.last_results: return
-
         try:
             w = self.settings.weighting
             weighting = w.value if hasattr(w, 'value') else w
-            
             s = self.settings.speed
             speed = s.value if hasattr(s, 'value') else s
-            
             dose_std_name = self.settings.current_dose_standard
             dose_params = self.settings.dose_standards.get(dose_std_name)
             
-            if mode_id == 1: # LEQ
-                 ResultsExporter.export_leq(
-                    path, 
-                    self.last_results, 
-                    self.settings.block_size_ms, 
-                    leq_interval_key, 
-                    weighting,
-                    dose_params,
-                    dose_std_name,
-                    self.settings.ref_pressure
-                )
-            elif mode_id == 0: # Lp
+            if mode_id == 1:
+                 ResultsExporter.export_leq(path, self.last_results, self.settings.block_size_ms, leq_interval_key, weighting, dose_params, dose_std_name, self.settings.ref_pressure)
+            elif mode_id == 0:
                 ResultsExporter.export_lp(path, self.last_results, weighting, speed)
-            elif mode_id in [2, 3]: # Spectrum
+            elif mode_id in [2, 3]:
                 ResultsExporter.export_spectrum(path, self.last_results, weighting, self.settings.ref_pressure)
-                
-            # TODO: Add export for PSD and Spectrogram if needed
-                
             self.sig_export_finished.emit()
             self.sig_status_message.emit(f"Exported to {path.name}")
         except Exception as e:

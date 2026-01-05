@@ -16,7 +16,8 @@ class ResultPlotter:
              dose_params,        
              dose_std_name: str,   
              ref_pressure: float,
-             autoscale=True, ymin=0.0, ymax=120.0):
+             autoscale=True, ymin=0.0, ymax=120.0,
+             spec_cmap="plasma"): # <--- Changed default to plasma
         
         figure.clear()
         
@@ -27,7 +28,7 @@ class ResultPlotter:
 
         try:
             match mode_id:
-                case 1: # LEQ MODE
+                case 1: # LEQ
                     ResultPlotter._plot_leq_dashboard(
                         figure, results, weighting, leq_interval_key, 
                         block_size_ms, dose_params, dose_std_name, ref_pressure,
@@ -44,16 +45,14 @@ class ResultPlotter:
                         figure, results, weighting, is_third, ref_pressure,
                         autoscale, ymin, ymax
                     )
-                case 4: # PSD Mode
+                case 4: # PSD
                     ResultPlotter._plot_psd(
                         figure, results[0], ref_pressure, 
                         autoscale, ymin, ymax
                     )
-                case 5: # Spectrogram Mode
-                    # Pass scaling parameters to map Y-scale limits to Color-scale limits
+                case 5: # Spectrogram
                     ResultPlotter._plot_spectrogram(
-                        figure, results[0], ref_pressure, 
-                        autoscale, ymin, ymax
+                        figure, results[0], ref_pressure, autoscale, ymin, ymax, spec_cmap
                     )
         except Exception as e:
             ax = figure.add_subplot(111)
@@ -66,75 +65,42 @@ class ResultPlotter:
     def _plot_leq_dashboard(fig, results, weighting, interval_key, 
                             block_size_ms, dose_params, dose_std_name, ref_pressure,
                             autoscale, ymin, ymax):
-        
+        # ... (Same as before)
         if interval_key in LEQ_INTERVAL_MAP:
             interval_txt, interval_sec = LEQ_INTERVAL_MAP[interval_key]
         else:
             interval_txt, interval_sec = "1 sec", 1.0
-
-        stats = leq_calculator.calculate_leq_analysis(
-            results, block_size_ms, interval_sec, dose_params, ref_pressure
-        )
-        
+        stats = leq_calculator.calculate_leq_analysis(results, block_size_ms, interval_sec, dose_params, ref_pressure)
         ax1 = fig.add_subplot(2, 1, 1)
         if len(stats.history['time']) > 0:
             t_plot = list(stats.history['time'])
             t_plot.append(t_plot[-1] + interval_sec)
             l_plot = list(stats.history['leq'])
             l_plot.append(l_plot[-1])
-            
             ax1.step(t_plot, l_plot, where='post', color='b', linewidth=1.5)
-            
-            if not autoscale:
-                ax1.set_ylim(ymin, ymax)
-            else:
-                ax1.autoscale(axis='y')
-
+            if not autoscale: ax1.set_ylim(ymin, ymax)
+            else: ax1.autoscale(axis='y')
         ax1.set_title(f"LEQ History ({interval_txt} interval, {weighting}-weighted)")
         ax1.set_ylabel("LEQ (dB)")
         ax1.grid(True)
-        
-        ax2 = fig.add_subplot(2, 1, 2)
-        ax2.axis('off')
-        
-        col1, col2, col3 = 0.05, 0.35, 0.65
-        
-        ax2.text(0.5, 0.95, f"Overall LEQ: {stats.overall:.1f} dB", 
-                 ha='center', fontsize=14, fontweight='bold', color='blue')
-        
-        ax2.text(col1, 0.60, f"Lmax: {stats.max:.1f} dB")
-        ax2.text(col1, 0.50, f"Lmin: {stats.min:.1f} dB")
-        ax2.text(col1, 0.40, f"L10: {stats.ln[10]:.1f} dB")
-        ax2.text(col1, 0.30, f"L20: {stats.ln[20]:.1f} dB")
-        ax2.text(col1, 0.20, f"L30: {stats.ln[30]:.1f} dB")
-        
-        ax2.text(col2, 0.60, f"L40: {stats.ln[40]:.1f} dB")
-        ax2.text(col2, 0.50, f"L50: {stats.ln[50]:.1f} dB")
-        ax2.text(col2, 0.40, f"L60: {stats.ln[60]:.1f} dB")
-        ax2.text(col2, 0.30, f"L70: {stats.ln[70]:.1f} dB")
-        ax2.text(col2, 0.20, f"L80: {stats.ln[80]:.1f} dB")
-        
-        dose_val = stats.dose.get('dose', 0.0)
-        twa_val = stats.dose.get('twa', 0.0)
-        
-        ax2.text(col3, 0.60, f"Dose ({dose_std_name})", fontweight='bold')
-        ax2.text(col3, 0.50, f"Dose %: {dose_val:.1f}%")
-        ax2.text(col3, 0.40, f"TWA: {twa_val:.1f} dB")
+        ax2 = fig.add_subplot(2, 1, 2); ax2.axis('off'); col1, col2, col3 = 0.05, 0.35, 0.65
+        ax2.text(0.5, 0.95, f"Overall LEQ: {stats.overall:.1f} dB", ha='center', fontsize=14, fontweight='bold', color='blue')
+        ax2.text(col1, 0.60, f"Lmax: {stats.max:.1f} dB"); ax2.text(col1, 0.50, f"Lmin: {stats.min:.1f} dB"); ax2.text(col1, 0.40, f"L10: {stats.ln[10]:.1f} dB"); ax2.text(col1, 0.30, f"L20: {stats.ln[20]:.1f} dB"); ax2.text(col1, 0.20, f"L30: {stats.ln[30]:.1f} dB")
+        ax2.text(col2, 0.60, f"L40: {stats.ln[40]:.1f} dB"); ax2.text(col2, 0.50, f"L50: {stats.ln[50]:.1f} dB"); ax2.text(col2, 0.40, f"L60: {stats.ln[60]:.1f} dB"); ax2.text(col2, 0.30, f"L70: {stats.ln[70]:.1f} dB"); ax2.text(col2, 0.20, f"L80: {stats.ln[80]:.1f} dB")
+        dose_val = stats.dose.get('dose', 0.0); twa_val = stats.dose.get('twa', 0.0)
+        ax2.text(col3, 0.60, f"Dose ({dose_std_name})", fontweight='bold'); ax2.text(col3, 0.50, f"Dose %: {dose_val:.1f}%"); ax2.text(col3, 0.40, f"TWA: {twa_val:.1f} dB")
 
     @staticmethod
     def _plot_lp_history(fig, results, weighting, speed, autoscale, ymin, ymax):
         ax = fig.add_subplot(1, 1, 1)
         t = [r.get('time', 0) for r in results]
         l = [r.get('lp', -300) for r in results] 
-        
         ax.plot(t, l)
         ax.set_title(f"Sound Pressure Level vs Time ({weighting}-weighted, {speed})")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Level (dB)")
         ax.grid(True)
-        
-        if not autoscale:
-            ax.set_ylim(ymin, ymax)
+        if not autoscale: ax.set_ylim(ymin, ymax)
         else:
             if l and max(l) < 0: ax.set_ylim(-100, 100)
             else: ax.autoscale(axis='y')
@@ -145,99 +111,56 @@ class ResultPlotter:
         ax = fig.add_subplot(1, 1, 1)
         last_res = results[-1]
         freqs = last_res.get('band_freqs', [])
-        
         if 'bands' in results[0]:
             energy_sums = np.zeros(len(freqs))
             count = 0
             for r in results:
                 if 'bands' in r:
-                    pressures = (10**(r['bands']/10.0)) * (ref_pressure**2)
-                    energy_sums += pressures
-                    count += 1
-            if count > 0:
-                mean_db = 10 * np.log10((energy_sums / count) / (ref_pressure**2) + 1e-30)
-            else:
-                mean_db = np.zeros(len(freqs))
-        else:
-            mean_db = []
-
+                    pressures = (10**(r['bands']/10.0)) * (ref_pressure**2); energy_sums += pressures; count += 1
+            if count > 0: mean_db = 10 * np.log10((energy_sums / count) / (ref_pressure**2) + 1e-30)
+            else: mean_db = np.zeros(len(freqs))
+        else: mean_db = []
         if len(freqs) > 0:
-            x = np.arange(len(freqs))
-            ax.bar(x, mean_db, color='#2ca02c', alpha=0.8)
-            ax.set_xticks(x)
+            x = np.arange(len(freqs)); ax.bar(x, mean_db, color='#2ca02c', alpha=0.8); ax.set_xticks(x)
             lbls = [f"{f/1000:.0f}k" if f >= 1000 else f"{f:.0f}" for f in freqs]
-            if is_third_octave: 
-                lbls = [l if i % 3 == 0 else "" for i, l in enumerate(lbls)]
+            if is_third_octave: lbls = [l if i % 3 == 0 else "" for i, l in enumerate(lbls)]
             ax.set_xticklabels(lbls, rotation=90)
-            
         ax.set_title(f"Average Spectrum ({weighting}-weighted)")
         ax.set_ylabel("Level (dB)")
         ax.grid(axis='y')
-        
-        if not autoscale:
-            ax.set_ylim(ymin, ymax)
-        else:
-            ax.autoscale(axis='y')
+        if not autoscale: ax.set_ylim(ymin, ymax)
+        else: ax.autoscale(axis='y')
 
     @staticmethod
     def _plot_psd(fig, data, ref_pressure, autoscale, ymin, ymax):
         ax = fig.add_subplot(1, 1, 1)
-        
-        freqs = data['freqs']
-        pxx = data['pxx']
-        nfft = data['nfft']
-        window = data['window']
-        weighting = data.get('weighting', 'Z')
-        
+        freqs = data['freqs']; pxx = data['pxx']; nfft = data['nfft']; window = data['window']; weighting = data.get('weighting', 'Z')
         lpxx = 10 * np.log10(pxx / (ref_pressure**2) + 1e-30)
-        
-        lp_max = np.max(lpxx)
-        lpxx_clamped = np.maximum(lpxx, lp_max - 60)
-        
+        lp_max = np.max(lpxx); lpxx_clamped = np.maximum(lpxx, lp_max - 60)
         ax.semilogx(freqs, lpxx_clamped)
-        
         ax.set_title(f"Power Spectral Density ({nfft} pt FFT, {window} window, {weighting}-weighted)")
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel("Pxx (dB/Hz)")
         ax.grid(True, which="both", ls="-", alpha=0.5)
         ax.set_xlim(left=freqs[1]) 
-        
-        if not autoscale:
-            ax.set_ylim(ymin, ymax)
-        else:
-            ax.autoscale(axis='y')
+        if not autoscale: ax.set_ylim(ymin, ymax)
+        else: ax.autoscale(axis='y')
 
     @staticmethod
-    def _plot_spectrogram(fig, data, ref_pressure, autoscale, ymin, ymax):
-        """Plots the spectrogram using pcolormesh, mapping autoscale/ymin/ymax to color limits."""
-        times = data['times']
-        freqs = data['freqs']
-        pxx = data['pxx_matrix']
-        nfft = data['nfft']
-        dt = data['dt']
-        weighting = data.get('weighting', 'Z')
-        
-        # Convert to dB
+    def _plot_spectrogram(fig, data, ref_pressure, autoscale, ymin, ymax, cmap_name):
+        """Plots the spectrogram using pcolormesh."""
+        times = data['times']; freqs = data['freqs']; pxx = data['pxx_matrix']; nfft = data['nfft']; dt = data['dt']; weighting = data.get('weighting', 'Z')
         SdB = 10 * np.log10(pxx / (ref_pressure**2) + 1e-30)
-        
         ax = fig.add_subplot(1, 1, 1)
+        vmin = None; vmax = None
+        if not autoscale: vmin = ymin; vmax = ymax
         
-        # Determine color scaling
-        vmin = None
-        vmax = None
-        if not autoscale:
-            vmin = ymin
-            vmax = ymax
-        
-        # pcolormesh expects X, Y, C. SdB.T matches (Freq, Time)
-        c = ax.pcolormesh(times, freqs, SdB.T, shading='auto', cmap='jet', vmin=vmin, vmax=vmax)
+        # Use cmap_name passed from settings
+        c = ax.pcolormesh(times, freqs, SdB.T, shading='auto', cmap=cmap_name, vmin=vmin, vmax=vmax)
         
         fig.colorbar(c, ax=ax, label='Level (dB)')
-        
         ax.set_title(f"Spectrogram ({nfft} pt FFT, {dt}s slice, {weighting}-weighted)")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Frequency (Hz)")
         ax.set_ylim(0, freqs[-1])
-        
-        # Ensure tight layout
         ax.set_xlim(times[0], times[-1])

@@ -4,7 +4,8 @@ import soundfile as sf
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QPushButton, QLabel, QGroupBox, 
                                QFileDialog, QMessageBox, QFrame, QButtonGroup, 
-                               QRadioButton, QProgressBar, QComboBox, QGridLayout)
+                               QRadioButton, QProgressBar, QComboBox, QGridLayout,
+                               QStackedWidget, QSizePolicy)
 from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtCore import QUrl, Slot
 
@@ -151,7 +152,10 @@ class MainWindow(QMainWindow):
         
         # --- 4. Analysis Mode Group ---
         grp_mode = QGroupBox("Analysis Mode")
-        layout_mode = QVBoxLayout()
+        layout_mode = QHBoxLayout()
+        layout_mode.setSpacing(10)
+        
+        col_radios = QVBoxLayout()
         self.bg_mode = QButtonGroup()
         
         modes = ["Level vs Time (Lp)", "LEQ Analysis", "Octave Bands", "1/3 Octave Bands", 
@@ -159,75 +163,107 @@ class MainWindow(QMainWindow):
         for i, m in enumerate(modes):
             rb = QRadioButton(m)
             self.bg_mode.addButton(rb, i)
-            layout_mode.addWidget(rb)
+            col_radios.addWidget(rb)
+        
+        col_radios.addStretch()
+        layout_mode.addLayout(col_radios, stretch=1)
+        
+        self.stack_settings = QStackedWidget()
+        
+        window_options = ["Hanning", "Hamming", "Flattop", "Blackman", "Blackman-Harris", "Rectangular", "Bartlett"]
+        palette_options = ["plasma", "viridis", "cividis", "inferno", "jet", "coolwarm"]
 
-        layout_mode.addSpacing(5)
+        # -- Page 0: Lp Settings --
+        page_lp = QWidget()
+        lay_lp = QVBoxLayout(page_lp)
+        lay_lp.setContentsMargins(0,0,0,0)
+        lay_lp.addWidget(QLabel("Plot Interval:"))
+        self.combo_lp_sampling = QComboBox()
+        for key, (label, _) in LEQ_INTERVAL_MAP.items():
+            self.combo_lp_sampling.addItem(label, key)
+        lay_lp.addWidget(self.combo_lp_sampling)
+        lay_lp.addStretch()
+        self.stack_settings.addWidget(page_lp)
         
-        self.bg_mode.idToggled.connect(self.on_mode_changed)
-        grp_mode.setLayout(layout_mode)
-        left_layout.addWidget(grp_mode)
+        # -- Page 1: LEQ Settings --
+        page_leq = QWidget()
+        lay_leq = QVBoxLayout(page_leq)
+        lay_leq.setContentsMargins(0,0,0,0)
         
-        # --- 5. LEQ Settings Group ---
-        self.grp_leq = QGroupBox("LEQ Settings")
-        layout_leq = QVBoxLayout() 
-        layout_leq.setContentsMargins(5, 5, 5, 5) 
-        layout_leq.setSpacing(2) 
-        
-        layout_leq.addWidget(QLabel("Plot Interval:"))
+        lay_leq.addWidget(QLabel("LEQ Time:"))
         self.combo_leq_int = QComboBox()
         for key, (label, _) in LEQ_INTERVAL_MAP.items():
             self.combo_leq_int.addItem(label, key)
-        layout_leq.addWidget(self.combo_leq_int)
+        lay_leq.addWidget(self.combo_leq_int)
         
-        self.grp_leq.setLayout(layout_leq)
-        left_layout.addWidget(self.grp_leq)
+        lay_leq.addWidget(QLabel("Dose Standard:"))
+        self.combo_dose_std = QComboBox()
+        self.combo_dose_std.addItems(["NIOSH", "OSHA"])
+        lay_leq.addWidget(self.combo_dose_std)
+        lay_leq.addStretch()
+        self.stack_settings.addWidget(page_leq)
         
-        # --- 6. PSD Settings Group ---
-        self.grp_psd = QGroupBox("PSD Settings")
-        layout_psd = QGridLayout()
-        layout_psd.setContentsMargins(5, 5, 5, 5) 
-        layout_psd.setVerticalSpacing(2)
-        
-        layout_psd.addWidget(QLabel("FFT Size:"), 0, 0)
+        # -- Page 2: PSD Settings --
+        page_psd = QWidget()
+        lay_psd = QVBoxLayout(page_psd)
+        lay_psd.setContentsMargins(0,0,0,0)
+        lay_psd.addWidget(QLabel("FFT Size:"))
         self.combo_psd_nfft = QComboBox()
         self.combo_psd_nfft.addItems(["256", "512", "1024", "2048", "4096", "8192", "16384"])
         self.combo_psd_nfft.setCurrentText("4096")
-        layout_psd.addWidget(self.combo_psd_nfft, 1, 0)
+        lay_psd.addWidget(self.combo_psd_nfft)
         
-        layout_psd.addWidget(QLabel("Window:"), 0, 1)
+        lay_psd.addWidget(QLabel("Window:"))
         self.combo_psd_window = QComboBox()
-        self.combo_psd_window.addItems(["Hanning", "Hamming", "Flattop"])
-        layout_psd.addWidget(self.combo_psd_window, 1, 1)
+        self.combo_psd_window.addItems(window_options)
+        lay_psd.addWidget(self.combo_psd_window)
+        lay_psd.addStretch()
+        self.stack_settings.addWidget(page_psd)
         
-        self.grp_psd.setLayout(layout_psd)
-        left_layout.addWidget(self.grp_psd)
-        self.grp_psd.hide() 
-        
-        # --- 7. Spectrogram Settings Group (Simplified) ---
-        self.grp_spec = QGroupBox("Spectrogram Settings")
-        layout_spec = QGridLayout()
-        layout_spec.setContentsMargins(5, 5, 5, 5)
-        layout_spec.setVerticalSpacing(2)
-        
-        # FFT Size
-        layout_spec.addWidget(QLabel("FFT Size:"), 0, 0)
+        # -- Page 3: Spectrogram Settings --
+        page_spec = QWidget()
+        lay_spec = QVBoxLayout(page_spec)
+        lay_spec.setContentsMargins(0,0,0,0)
+        lay_spec.addWidget(QLabel("FFT Size:"))
         self.combo_spec_nfft = QComboBox()
         self.combo_spec_nfft.addItems(["128", "256", "512", "1024", "2048", "4096"])
         self.combo_spec_nfft.setCurrentText("512")
-        layout_spec.addWidget(self.combo_spec_nfft, 1, 0)
+        lay_spec.addWidget(self.combo_spec_nfft)
         
-        # Time Slice
-        layout_spec.addWidget(QLabel("Slice (s):"), 0, 1)
+        lay_spec.addWidget(QLabel("Slice (s):"))
         self.combo_spec_dt = QComboBox()
         self.combo_spec_dt.addItem("0.1 s", 0.1)
         self.combo_spec_dt.addItem("1.0 s", 1.0)
         self.combo_spec_dt.addItem("10.0 s", 10.0)
         self.combo_spec_dt.setCurrentIndex(1)
-        layout_spec.addWidget(self.combo_spec_dt, 1, 1)
+        lay_spec.addWidget(self.combo_spec_dt)
         
-        self.grp_spec.setLayout(layout_spec)
-        left_layout.addWidget(self.grp_spec)
-        self.grp_spec.hide() # Hidden by default
+        lay_spec.addWidget(QLabel("Window:"))
+        self.combo_spec_window = QComboBox()
+        self.combo_spec_window.addItems(window_options)
+        self.combo_spec_window.setCurrentText("Hamming")
+        lay_spec.addWidget(self.combo_spec_window)
+        
+        # Palette Selector
+        lay_spec.addWidget(QLabel("Palette:"))
+        self.combo_spec_cmap = QComboBox()
+        self.combo_spec_cmap.addItems(palette_options)
+        self.combo_spec_cmap.setCurrentText("plasma")
+        # Connect signal for dynamic update
+        self.combo_spec_cmap.currentTextChanged.connect(self.on_cmap_changed)
+        lay_spec.addWidget(self.combo_spec_cmap)
+        
+        lay_spec.addStretch()
+        self.stack_settings.addWidget(page_spec)
+        
+        # -- Page 4: Empty (Octave/Third) --
+        self.stack_settings.addWidget(QWidget())
+        
+        layout_mode.addWidget(self.stack_settings, stretch=1)
+        
+        self.bg_mode.idToggled.connect(self.on_mode_changed)
+        grp_mode.setLayout(layout_mode)
+        left_layout.addWidget(grp_mode)
         
         left_layout.addSpacing(20)
         
@@ -243,7 +279,6 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.btn_analyze)
         
         left_layout.addStretch()
-
         main_layout.addWidget(left_panel)
         
         self.plot_panel = MatplotlibWidget()
@@ -257,26 +292,39 @@ class MainWindow(QMainWindow):
         s_val = settings.speed.value if hasattr(settings.speed, 'value') else settings.speed
 
         for btn in self.bg_weight.buttons():
-            if btn.text() == w_val: btn.setChecked(True); break
-        else: self.bg_weight.button(0).setChecked(True)
+            if btn.text() == w_val:
+                btn.setChecked(True)
+                break
+        else:
+            self.bg_weight.button(0).setChecked(True)
 
         for btn in self.bg_speed.buttons():
-            if btn.text() == s_val: btn.setChecked(True); break
-        else: self.bg_speed.button(1).setChecked(True) 
+            if btn.text() == s_val:
+                btn.setChecked(True)
+                break
+        else:
+            self.bg_speed.button(1).setChecked(True) 
 
         self.bg_mode.button(settings.analysis_mode_index).setChecked(True)
         self.combo_leq_int.setCurrentIndex(settings.leq_interval_index)
         
-        # PSD
+        if hasattr(settings, 'lp_interval_index'):
+            self.combo_lp_sampling.setCurrentIndex(settings.lp_interval_index)
+        
+        if hasattr(settings, 'current_dose_standard'):
+            self.combo_dose_std.setCurrentText(settings.current_dose_standard)
+        
         if hasattr(settings, 'psd_nfft'): self.combo_psd_nfft.setCurrentText(str(settings.psd_nfft))
         if hasattr(settings, 'psd_window'): self.combo_psd_window.setCurrentText(settings.psd_window)
         
-        # Spectrogram
         if hasattr(settings, 'spec_nfft'): self.combo_spec_nfft.setCurrentText(str(settings.spec_nfft))
-        # For combos with data, we need to find index
         if hasattr(settings, 'spec_dt'):
             idx = self.combo_spec_dt.findData(settings.spec_dt)
             if idx >= 0: self.combo_spec_dt.setCurrentIndex(idx)
+        if hasattr(settings, 'spec_window'):
+            self.combo_spec_window.setCurrentText(settings.spec_window)
+        if hasattr(settings, 'spec_cmap'):
+            self.combo_spec_cmap.setCurrentText(settings.spec_cmap)
         
         self.plot_panel.set_plot_settings(
             settings.plot_autoscale,
@@ -299,6 +347,12 @@ class MainWindow(QMainWindow):
         self.controller.settings.analysis_mode_index = self.bg_mode.checkedId()
         self.controller.settings.leq_interval_index = self.combo_leq_int.currentIndex()
         
+        # Lp
+        self.controller.settings.lp_interval_index = self.combo_lp_sampling.currentIndex()
+        
+        # LEQ
+        self.controller.settings.current_dose_standard = self.combo_dose_std.currentText()
+        
         # PSD
         self.controller.settings.psd_nfft = int(self.combo_psd_nfft.currentText())
         self.controller.settings.psd_window = self.combo_psd_window.currentText()
@@ -306,17 +360,27 @@ class MainWindow(QMainWindow):
         # Spectrogram
         self.controller.settings.spec_nfft = int(self.combo_spec_nfft.currentText())
         self.controller.settings.spec_dt = self.combo_spec_dt.currentData()
+        self.controller.settings.spec_window = self.combo_spec_window.currentText()
+        self.controller.settings.spec_cmap = self.combo_spec_cmap.currentText()
 
     def on_mode_changed(self, mode_id, checked):
         if not checked: return
-        
-        # Mode 4=PSD, 5=Spectrogram
-        is_psd = (mode_id == 4)
-        is_spec = (mode_id == 5)
-        
-        self.grp_psd.setVisible(is_psd)
-        self.grp_spec.setVisible(is_spec)
-        self.grp_leq.setVisible(not is_psd and not is_spec)
+        page_map = {
+            0: 0, # Lp -> Page 0
+            1: 1, # LEQ -> Page 1
+            2: 4, # Octave -> Page 4 (Empty)
+            3: 4, # 3rd Oct -> Page 4 (Empty)
+            4: 2, # PSD -> Page 2
+            5: 3  # Spectrogram -> Page 3
+        }
+        idx = page_map.get(mode_id, 4)
+        self.stack_settings.setCurrentIndex(idx)
+
+    def on_cmap_changed(self, text):
+        """Dynamic update for colormap change."""
+        self.controller.settings.spec_cmap = text
+        if self.controller.last_results:
+            self._redraw_plot()
 
     def on_btn_load_click(self):
         start_dir = self.controller.settings.last_directory
@@ -326,9 +390,11 @@ class MainWindow(QMainWindow):
 
     def on_select_section(self):
         if not self.controller.filepath: return
+        
         dlg = WaveformDialog(str(self.controller.filepath), self)
         if self.controller.end_time:
              dlg.viewer.region.setRegion([self.controller.start_time, self.controller.end_time])
+             
         if dlg.exec():
             s, e = dlg.get_selection()
             self.controller.set_analysis_range(s, e)
@@ -336,6 +402,7 @@ class MainWindow(QMainWindow):
 
     def on_calibrate(self):
         if not self.controller.filepath: return
+        
         dlg = CalibrationDialog(
             self.controller.cal_factor, 
             self.controller.filepath, 
@@ -352,16 +419,20 @@ class MainWindow(QMainWindow):
         if self.btn_analyze.text() == "STOP":
             self.controller.stop_analysis()
             return
+
         self._scrape_ui_to_settings()
         mode_id = self.bg_mode.checkedId()
         self.controller.run_analysis(mode_id)
 
     def on_export_csv(self):
         if not self.controller.last_results: return
+        
         path_str, _ = QFileDialog.getSaveFileName(self, "Export CSV", "results.csv", "CSV Files (*.csv)")
         if not path_str: return
+        
         mode_id = self.bg_mode.checkedId()
         leq_key = self.combo_leq_int.currentData()
+        
         self.controller.export_results(Path(path_str), mode_id, leq_key)
 
     def on_action_save_figure(self):
@@ -405,23 +476,32 @@ class MainWindow(QMainWindow):
 
     def _update_file_label_text(self, info=None):
         fname = "None"
-        if self.controller.filepath: fname = self.controller.filepath.name
+        if self.controller.filepath:
+             fname = self.controller.filepath.name
+
         cal = f"{self.controller.cal_factor:.4f}"
+        
         fs_str = ""
         dur_str = ""
         
         if self.controller.filepath:
+            # Attempt to re-read info if not provided (e.g. after cal dialog)
             if info is None:
-                try: info = sf.info(str(self.controller.filepath))
-                except Exception: pass
+                try:
+                    info = sf.info(str(self.controller.filepath))
+                except Exception:
+                    pass
+            
             if info:
                 fs_str = f"{info.samplerate} Hz"
                 dur_str = f"{info.duration:.2f} s"
         
+        # Always 4 lines
         txt = (f"File: {fname}\n"
                f"Cal Factor: {cal}\n"
                f"Fs: {fs_str}\n"
                f"Dur: {dur_str}")
+             
         self.lbl_info.setText(txt)
 
     @Slot(str)
@@ -430,6 +510,7 @@ class MainWindow(QMainWindow):
         self.btn_analyze.setText("STOP")
         self.btn_analyze.setStyleSheet("background-color: #fca5a5;")
         self.progress.setValue(0)
+        # Note: We do NOT setMaximum here anymore because we wait for sig_total_blocks
         self.update_status_bar(f"Analyzing ({speed_str})...")
 
     @Slot(list)
@@ -438,7 +519,9 @@ class MainWindow(QMainWindow):
         self.btn_analyze.setText("ANALYZE")
         self.btn_analyze.setStyleSheet("background-color: #dbeafe;")
         self.btn_analyze.setEnabled(True)
+        
         self.progress.setValue(0)
+        
         self.menu_export.setEnabled(True)
         self._redraw_plot()
 
@@ -448,6 +531,7 @@ class MainWindow(QMainWindow):
             self.toggle_inputs(True)
             self.btn_analyze.setText("ANALYZE")
             self.btn_analyze.setStyleSheet("background-color: #dbeafe;")
+            
         QMessageBox.critical(self, "Error", msg)
 
     @Slot(str)
@@ -496,7 +580,8 @@ class MainWindow(QMainWindow):
             self.controller.settings.ref_pressure,
             self.controller.settings.plot_autoscale,
             self.controller.settings.plot_ymin,
-            self.controller.settings.plot_ymax
+            self.controller.settings.plot_ymax,
+            spec_cmap=self.controller.settings.spec_cmap
         )
         self.plot_panel.draw()
 

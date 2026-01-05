@@ -61,13 +61,25 @@ class StreamProcessor:
         except Exception as e:
             raise ValueError(f"Could not read file info: {e}")
 
+    def _get_window_map(self):
+        """Centralized window mapping for consistency."""
+        return {
+            'Hanning': 'hann',
+            'Hamming': 'hamming',
+            'Flattop': 'flattop',
+            'Blackman': 'blackman',
+            'Blackman-Harris': 'blackmanharris',
+            'Rectangular': 'boxcar',
+            'Bartlett': 'bartlett'
+        }
+
     def calculate_psd(self, 
                       nfft: int = 4096, 
                       window_type: str = 'Hanning', 
                       weighting: Weighting = Weighting.A
                       ) -> Generator[dict[str, Any], None, None]:
         
-        win_map = {'Hanning': 'hann', 'Hamming': 'hamming', 'Flattop': 'flattop'}
+        win_map = self._get_window_map()
         scipy_window = win_map.get(window_type, 'hann')
         
         chunk_size_sec = 10.0
@@ -85,7 +97,8 @@ class StreamProcessor:
         
         with sf.SoundFile(str(self.filepath)) as f:
             for chunk in f.blocks(blocksize=chunk_samples, always_2d=False, fill_value=0.0):
-                if len(chunk) < nperseg: continue
+                if len(chunk) < nperseg:
+                    continue 
                 
                 chunk = chunk * self.cal_factor
                 if chunk.ndim > 1: chunk = np.mean(chunk, axis=1) 
@@ -123,20 +136,16 @@ class StreamProcessor:
     def calculate_spectrogram(self, 
                               nfft: int = 512, 
                               dt: float = 1.0, 
+                              window_type: str = 'Hamming', 
                               weighting: Weighting = Weighting.A
                               ) -> Generator[dict[str, Any], None, None]:
-        """
-        Calculates a spectrogram by computing the PSD for consecutive time slices of length dt.
-        Matches vslm.m implementation logic (slice -> pwelch -> stack).
-        """
-        # vslm.m uses default pwelch window (Hamming) for spectrogram
-        window = 'hamming'
-        noverlap = nfft // 2
         
+        win_map = self._get_window_map()
+        scipy_window = win_map.get(window_type, 'hamming')
+        
+        noverlap = nfft // 2
         chunk_samples = int(self.fs * dt)
-        if chunk_samples < nfft:
-             # Ensure chunk is at least nfft size for pwelch to work
-             chunk_samples = nfft
+        if chunk_samples < nfft: chunk_samples = nfft
         
         results_pxx = []
         time_axis = []
@@ -150,12 +159,10 @@ class StreamProcessor:
             for chunk in f.blocks(blocksize=chunk_samples, always_2d=False, fill_value=0.0):
                 if len(chunk) < nfft: continue 
                 
-                # Calibration & Mixdown
                 chunk = chunk * self.cal_factor
                 if chunk.ndim > 1: chunk = np.mean(chunk, axis=1)
                 
-                # Compute PSD for this time slice
-                f_c, pxx_c = scipy.signal.welch(chunk, fs=self.fs, window=window,
+                f_c, pxx_c = scipy.signal.welch(chunk, fs=self.fs, window=scipy_window,
                                                 nperseg=nfft, noverlap=noverlap,
                                                 nfft=nfft, scaling='density')
                 
@@ -171,22 +178,15 @@ class StreamProcessor:
         if not results_pxx:
              raise ValueError("File too short for spectrogram analysis.")
 
-        # Stack into matrix (Rows=Freq, Cols=Time for vslm.m style, but numpy is usually Freq x Time)
-        # We'll store as Time x Freq (rows x cols) for pcolormesh(X, Y, C)
-        # S_matrix: shape (N_time, N_freq)
         S_matrix = np.array(results_pxx)
-        
-        # Apply Frequency Weighting
-        # vslm.m applies weighting after PSD: Pxx = Pxx * |H|^2
         w_response = get_weighting_power_response(freqs, weighting)
-        # Broadcast weighting across time axis
         S_matrix = S_matrix * w_response[np.newaxis, :]
         
         yield {
             'type': 'spectrogram',
             'times': np.array(time_axis),
             'freqs': freqs,
-            'pxx_matrix': S_matrix, # Linear power units (Pa^2/Hz)
+            'pxx_matrix': S_matrix, 
             'nfft': nfft,
             'dt': dt,
             'weighting': weighting
