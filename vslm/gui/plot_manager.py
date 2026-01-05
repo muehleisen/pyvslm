@@ -44,9 +44,14 @@ class ResultPlotter:
                         figure, results, weighting, is_third, ref_pressure,
                         autoscale, ymin, ymax
                     )
-                case 4: # PSD Mode (New)
-                    # results[0] is the result dict
+                case 4: # PSD Mode
                     ResultPlotter._plot_psd(
+                        figure, results[0], ref_pressure, 
+                        autoscale, ymin, ymax
+                    )
+                case 5: # Spectrogram Mode
+                    # Pass scaling parameters to map Y-scale limits to Color-scale limits
+                    ResultPlotter._plot_spectrogram(
                         figure, results[0], ref_pressure, 
                         autoscale, ymin, ymax
                     )
@@ -71,7 +76,6 @@ class ResultPlotter:
             results, block_size_ms, interval_sec, dose_params, ref_pressure
         )
         
-        # Top Plot (Time History)
         ax1 = fig.add_subplot(2, 1, 1)
         if len(stats.history['time']) > 0:
             t_plot = list(stats.history['time'])
@@ -90,7 +94,6 @@ class ResultPlotter:
         ax1.set_ylabel("LEQ (dB)")
         ax1.grid(True)
         
-        # Bottom Panel (Text Dashboard)
         ax2 = fig.add_subplot(2, 1, 2)
         ax2.axis('off')
         
@@ -111,7 +114,6 @@ class ResultPlotter:
         ax2.text(col2, 0.30, f"L70: {stats.ln[70]:.1f} dB")
         ax2.text(col2, 0.20, f"L80: {stats.ln[80]:.1f} dB")
         
-        # Dose Results
         dose_val = stats.dose.get('dose', 0.0)
         twa_val = stats.dose.get('twa', 0.0)
         
@@ -179,7 +181,6 @@ class ResultPlotter:
 
     @staticmethod
     def _plot_psd(fig, data, ref_pressure, autoscale, ymin, ymax):
-        """Plots Power Spectral Density from calculate_psd results."""
         ax = fig.add_subplot(1, 1, 1)
         
         freqs = data['freqs']
@@ -188,11 +189,8 @@ class ResultPlotter:
         window = data['window']
         weighting = data.get('weighting', 'Z')
         
-        # Convert to dB/Hz
-        # pxx is in Pa^2/Hz. Convert to dB re 20uPa.
         lpxx = 10 * np.log10(pxx / (ref_pressure**2) + 1e-30)
         
-        # Handle Dynamic Range clamping like vslm.m
         lp_max = np.max(lpxx)
         lpxx_clamped = np.maximum(lpxx, lp_max - 60)
         
@@ -202,9 +200,44 @@ class ResultPlotter:
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel("Pxx (dB/Hz)")
         ax.grid(True, which="both", ls="-", alpha=0.5)
-        ax.set_xlim(left=freqs[1]) # Avoid 0 Hz in log plot
+        ax.set_xlim(left=freqs[1]) 
         
         if not autoscale:
             ax.set_ylim(ymin, ymax)
         else:
             ax.autoscale(axis='y')
+
+    @staticmethod
+    def _plot_spectrogram(fig, data, ref_pressure, autoscale, ymin, ymax):
+        """Plots the spectrogram using pcolormesh, mapping autoscale/ymin/ymax to color limits."""
+        times = data['times']
+        freqs = data['freqs']
+        pxx = data['pxx_matrix']
+        nfft = data['nfft']
+        dt = data['dt']
+        weighting = data.get('weighting', 'Z')
+        
+        # Convert to dB
+        SdB = 10 * np.log10(pxx / (ref_pressure**2) + 1e-30)
+        
+        ax = fig.add_subplot(1, 1, 1)
+        
+        # Determine color scaling
+        vmin = None
+        vmax = None
+        if not autoscale:
+            vmin = ymin
+            vmax = ymax
+        
+        # pcolormesh expects X, Y, C. SdB.T matches (Freq, Time)
+        c = ax.pcolormesh(times, freqs, SdB.T, shading='auto', cmap='jet', vmin=vmin, vmax=vmax)
+        
+        fig.colorbar(c, ax=ax, label='Level (dB)')
+        
+        ax.set_title(f"Spectrogram ({nfft} pt FFT, {dt}s slice, {weighting}-weighted)")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Frequency (Hz)")
+        ax.set_ylim(0, freqs[-1])
+        
+        # Ensure tight layout
+        ax.set_xlim(times[0], times[-1])

@@ -5,7 +5,8 @@ class AnalysisMode(StrEnum):
     LEQ = "leq"
     OCTAVE = "octave"
     THIRD_OCTAVE = "third_octave"
-    PSD = "psd"  # <--- Added
+    PSD = "psd"
+    SPECTROGRAM = "spectrogram" # <--- Added
 
 class Weighting(StrEnum):
     A = 'A'

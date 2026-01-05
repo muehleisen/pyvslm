@@ -61,7 +61,10 @@ class VSLMController(QObject):
     def run_analysis(self, mode_id: int):
         if not self.filepath: return
 
+        # Mode IDs: 4=PSD, 5=Spectrogram (Assuming 5 based on list index in GUI)
         is_psd = (mode_id == 4)
+        is_spec = (mode_id == 5)
+        
         do_bands = (mode_id in [2, 3])
         band_res = 'third' if mode_id == 3 else 'octave'
         
@@ -74,9 +77,12 @@ class VSLMController(QObject):
         if self.worker and self.worker.isRunning():
             self.worker.stop()
         
-        # Grab PSD settings from settings object (populated by GUI)
+        # Grab settings
         psd_nfft = getattr(self.settings, 'psd_nfft', 4096)
         psd_window = getattr(self.settings, 'psd_window', 'Hanning')
+        
+        spec_nfft = getattr(self.settings, 'spec_nfft', 512)
+        spec_dt = getattr(self.settings, 'spec_dt', 1.0)
         
         self.worker = AnalysisWorker(
             filepath=self.filepath,
@@ -90,7 +96,10 @@ class VSLMController(QObject):
             ref_pressure=self.settings.ref_pressure,
             mode_is_psd=is_psd,
             psd_nfft=psd_nfft,
-            psd_window=psd_window
+            psd_window=psd_window,
+            mode_is_spec=is_spec,
+            spec_nfft=spec_nfft,
+            spec_dt=spec_dt
         )
 
         self.worker.sig_total_blocks.connect(self.sig_total_blocks.emit)
@@ -109,8 +118,8 @@ class VSLMController(QObject):
 
     def _on_worker_finished(self, results):
         # Filtering only applies to time-series results.
-        # PSD results are singular and already computed over the file.
-        if results and isinstance(results[0], dict) and results[0].get('type') == 'psd':
+        # PSD and Spectrogram results are singular objects
+        if results and isinstance(results[0], dict) and results[0].get('type') in ['psd', 'spectrogram']:
             filtered = results
         else:
             if self.end_time:
@@ -150,6 +159,8 @@ class VSLMController(QObject):
                 ResultsExporter.export_lp(path, self.last_results, weighting, speed)
             elif mode_id in [2, 3]: # Spectrum
                 ResultsExporter.export_spectrum(path, self.last_results, weighting, self.settings.ref_pressure)
+                
+            # TODO: Add export for PSD and Spectrogram if needed
                 
             self.sig_export_finished.emit()
             self.sig_status_message.emit(f"Exported to {path.name}")

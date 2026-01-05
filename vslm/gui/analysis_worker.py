@@ -17,8 +17,10 @@ class AnalysisWorker(QThread):
 
     def __init__(self, filepath, cal_factor, block_size_ms, weighting, 
                  do_bands, band_res, speed, band_order, ref_pressure,
-                 # NEW: PSD Params
-                 mode_is_psd=False, psd_nfft=4096, psd_window='Hanning'):
+                 # PSD Params
+                 mode_is_psd=False, psd_nfft=4096, psd_window='Hanning',
+                 # Spectrogram Params
+                 mode_is_spec=False, spec_nfft=512, spec_dt=1.0):
         super().__init__()
         self.filepath = filepath
         self.cal_factor = cal_factor
@@ -34,38 +36,38 @@ class AnalysisWorker(QThread):
         self.psd_nfft = psd_nfft
         self.psd_window = psd_window
         
+        self.mode_is_spec = mode_is_spec
+        self.spec_nfft = spec_nfft
+        self.spec_dt = spec_dt
+        
         self._is_running = True
 
     def run(self):
         try:
             processor = StreamProcessor(self.filepath, self.cal_factor)
             
-            if self.mode_is_psd:
+            if self.mode_is_spec:
+                # --- SPECTROGRAM PATH ---
+                self.sig_total_blocks.emit(100)
+                gen = processor.calculate_spectrogram(
+                    nfft=self.spec_nfft,
+                    dt=self.spec_dt,
+                    weighting=self.weighting
+                )
+                self._run_generator(gen)
+
+            elif self.mode_is_psd:
                 # --- PSD PATH ---
-                self.sig_total_blocks.emit(100) # Progress is 0-100%
-                
+                self.sig_total_blocks.emit(100) 
                 gen = processor.calculate_psd(
                     nfft=self.psd_nfft,
                     window_type=self.psd_window,
                     weighting=self.weighting
                 )
-                
-                final_result = None
-                with closing(gen):
-                    for item in gen:
-                        if not self._is_running: break
-                        
-                        if isinstance(item, int):
-                            self.sig_progress.emit(item)
-                        elif isinstance(item, dict):
-                            final_result = item
-                
-                if self._is_running and final_result:
-                    self.sig_progress.emit(100)
-                    self.sig_finished.emit([final_result]) # Wrap in list to match signature
+                self._run_generator(gen)
 
             else:
-                # --- STANDARD PATH ---
+                # --- STANDARD PATH (Time History) ---
                 total_blocks = int((processor.duration * 1000) / self.block_size_ms)
                 self.sig_total_blocks.emit(total_blocks)
                 
@@ -82,12 +84,9 @@ class AnalysisWorker(QThread):
                 
                 with closing(gen):
                     for i, block in enumerate(gen):
-                        if not self._is_running:
-                            break
-                        
+                        if not self._is_running: break
                         results.append(block)
-                        if i % 10 == 0:
-                            self.sig_progress.emit(i + 1)
+                        if i % 10 == 0: self.sig_progress.emit(i + 1)
                 
                 if self._is_running:
                     self.sig_progress.emit(total_blocks)
@@ -96,6 +95,22 @@ class AnalysisWorker(QThread):
         except Exception as e:
             error_msg = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             self.sig_error.emit(error_msg)
+
+    def _run_generator(self, gen):
+        """Helper to iterate single-result generators (PSD/Spectrogram)"""
+        final_result = None
+        with closing(gen):
+            for item in gen:
+                if not self._is_running: break
+                
+                if isinstance(item, int):
+                    self.sig_progress.emit(item)
+                elif isinstance(item, dict):
+                    final_result = item
+        
+        if self._is_running and final_result:
+            self.sig_progress.emit(100)
+            self.sig_finished.emit([final_result])
 
     def stop(self):
         """Signals the thread to stop processing safely."""

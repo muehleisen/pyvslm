@@ -40,9 +40,15 @@ class AppSettings(BaseModel):
     # Advanced Analysis
     band_filter_order: int = 24
     
-    # PSD Settings (Added)
+    # PSD Settings
     psd_nfft: int = 4096
     psd_window: str = "Hanning"
+    
+    # Spectrogram Settings (Added)
+    spec_nfft: int = 512
+    spec_dt: float = 1.0
+    spec_dnr: float = 0.0 # 0.0 implies Auto
+    spec_view: str = "2D"
     
     # Dose Settings
     current_dose_standard: str = 'NIOSH'
@@ -57,7 +63,6 @@ class AppSettings(BaseModel):
     plot_ymax: float = 120.0
 
     # Allow extra fields in YAML without crashing
-    # validate_assignment=True forces Pydantic to convert "A" -> Weighting.A when assigned!
     model_config = ConfigDict(extra='ignore', validate_assignment=True)
 
 class SettingsManager:
