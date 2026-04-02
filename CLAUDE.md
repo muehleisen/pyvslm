@@ -7,6 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **pyvslm** is a Python-based Virtual Sound Level Meter (VSLM) — a port of the MATLAB `vslm.m` application.
 The active implementation lives in the **root directory**. `gemini_conversion/` is the prior implementation kept for reference.
 
+---
+
 ## Environment Setup
 
 ```bash
@@ -32,6 +34,17 @@ python -m pytest tests/test_engine.py
 # Run a specific test
 python -m pytest tests/test_engine.py::TestBroadbandLeq::test_steady_state_leq
 ```
+
+## Filter visualisation plots
+
+```bash
+python tests/plot_weighting_filters.py          # A/C weighting vs IEC 61672-1
+python tests/plot_weighting_filters_compact.py  # 2×2 magnitude + error grid
+python tests/plot_ansi_filters.py               # Octave bank vs IEC 61260-1
+python tests/plot_ansi_filters.py third         # 1/3-octave version
+```
+
+---
 
 ## Architecture
 
@@ -73,6 +86,8 @@ and loaded on startup. `SettingsManager` handles load/save with graceful fallbac
 `MatplotlibWidget` (`vslm/gui/plot_widget.py`), a `QWidget` embedding a `FigureCanvas` with a custom
 toolbar that includes a Y-axis scaling button.
 
+---
+
 ## Package Layout
 
 ```
@@ -98,9 +113,14 @@ vslm/
         ├── waveform.py     WaveformDialog (SpanSelector section picker)
         └── about.py        AboutDialog
 tests/
-├── test_engine.py        StreamProcessor unit tests (synthetic WAV)
-└── test_filters.py       Weighting + octave filter compliance tests
+├── test_engine.py                  StreamProcessor unit tests (synthetic WAV)
+├── test_filters.py                 Weighting + octave filter compliance tests
+├── plot_weighting_filters.py       A/C weighting response plots
+├── plot_weighting_filters_compact.py  2×2 magnitude + error grid
+└── plot_ansi_filters.py            Octave / 1/3-octave bank compliance plots
 ```
+
+---
 
 ## Key Conventions
 
@@ -110,3 +130,45 @@ tests/
 - Weighting filter tests use **IEC 61672-1 Class 1 tolerances** per frequency (not a flat ±0.5 dB).
   Frequencies above `fs / 2.2` are skipped — bilinear transform cannot replicate the analog response there.
 - Tests generate temporary WAV files and clean up after themselves; no installed package required.
+- Always install packages with `conda install -c conda-forge`; only use pip if a package is unavailable there.
+
+---
+
+## Work History
+
+### Session 1 — Initial Python rewrite (claude_conversion branch)
+
+Complete rewrite from the `gemini_conversion/` prototype into a clean root-level package:
+
+**Completed**
+- Restructured package layout: `vslm/dsp/`, `vslm/gui/dialogs/`, `vslm/settings.py`
+- `AppSettings` (Pydantic) with YAML persistence to `~/.vslm_settings.yaml`
+- `StreamProcessor` with six analysis modes: Lp, Leq, octave, 1/3-octave, PSD, spectrogram
+- `WeightingFilter`: IEC 61672-1 A/C/Z using hybrid MZT + minimax optimisation
+- `OctaveFilterBank`: ANSI S1.11 Butterworth bandpass with α-correction for Class 1 compliance
+- `TimeWeightingDetector`: IEC 61672-1 Fast/Slow/Impulse exponential averager
+- `CalibrationDialog`: manual factor entry + from-selection reference tone method
+- `WaveformDialog`: matplotlib SpanSelector for time-region selection
+- CSV export for Lp, Leq (with NIOSH/OSHA dose), and spectrum modes
+- Filter visualisation plot scripts ported from `gemini_conversion/tests/`
+- Fixed IEC 61260-1 spectral mask for 1/3-octave (Ω-based f/fc ratios, −60 dB floor)
+- Fixed weighting filter tests to use per-frequency IEC 61672-1 Class 1 tolerances
+- Added equation-sourcing comments to all DSP modules
+- `README.md` and `CLAUDE.md` written
+
+**Verified working**
+- 18/18 unit tests pass
+- GUI launches, loads WAV, runs all six analysis modes
+- Settings persist across app restarts
+- Calibration dialog (manual + reference tone)
+- Waveform section selector (clamping, selection update)
+- CSV export (Lp, Leq, spectrum)
+
+**Known gaps / future work**
+- No PyInstaller build script yet
+- PSD and spectrogram CSV export not implemented (export_lp/leq/spectrum only)
+- No integration test with a real calibrated recording
+- `gui/__init__.py` and `vslm/__init__.py` are minimal stubs — may need exports if packaged
+- `plot_manager.py` Leq plot panel (ax2) stats layout could be improved for long dose standard names
+- Waveform dialog does not restore a previously-saved selection on re-open
+- No dark-mode / HiDPI stylesheet applied
