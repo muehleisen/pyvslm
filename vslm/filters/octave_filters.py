@@ -24,32 +24,72 @@ def get_ansi_center_frequencies(resolution='octave', base=10):
 
     return fm
 
-def design_compliant_sos(fc, fs, resolution='third', order=24):
+# def design_compliant_sos(fc, fs, resolution='third', order=24):
+#     """
+#     Designs a high-order Butterworth filter compliant with ANSI S1.11 Class 1.
+#     """
+#     if resolution == 'octave':
+#         bandwidth_factor = 2**(1.0 / 2.0)
+#     else:
+#         bandwidth_factor = 2**(1.0 / 6.0)
+        
+#     f_lower_ansi = fc / bandwidth_factor
+#     f_upper_ansi = fc * bandwidth_factor
+    
+#     target_attenuation_db = 0.05 
+#     term = (10**(target_attenuation_db / 10.0)) - 1
+#     alpha = term ** (1.0 / (2.0 * order))
+    
+#     f_lower_design = f_lower_ansi * alpha
+#     f_upper_design = f_upper_ansi / alpha
+    
+#     nyquist = fs / 2.0
+    
+#     if f_upper_design >= nyquist * 0.99:
+#         f_upper_design = nyquist * 0.99
+#         if f_lower_design >= f_upper_design:
+#             raise ValueError(f"Band centered at {fc:.1f} Hz is too close to Nyquist ({nyquist} Hz)")
+
+#     sos = scipy.signal.butter(
+#         N=order, 
+#         Wn=[f_lower_design, f_upper_design], 
+#         btype='bandpass', 
+#         fs=fs, 
+#         output='sos'
+#     )
+#     return sos
+def design_compliant_sos(fc, fs, resolution='octave', order=8, base=10):
     """
     Designs a high-order Butterworth filter compliant with ANSI S1.11 Class 1.
     """
-    if resolution == 'octave':
-        bandwidth_factor = 2**(1.0 / 2.0)
+    # Determine the correct octave ratio G based on the chosen system
+    if base == 10:
+        G = 10**0.3
     else:
-        bandwidth_factor = 2**(1.0 / 6.0)
+        G = 2.0
         
-    f_lower_ansi = fc / bandwidth_factor
-    f_upper_ansi = fc * bandwidth_factor
-    
-    target_attenuation_db = 0.05 
-    term = (10**(target_attenuation_db / 10.0)) - 1
-    alpha = term ** (1.0 / (2.0 * order))
-    
-    f_lower_design = f_lower_ansi * alpha
-    f_upper_design = f_upper_ansi / alpha
+    # Calculate bandwidth factors
+    if resolution == 'octave':
+        bandwidth_factor = G**(1.0 / 2.0)
+    elif resolution == 'third':
+        bandwidth_factor = G**(1.0 / 6.0)
+    else:
+        raise ValueError("Resolution must be 'octave' or 'third'")
+        
+    # Set the -3dB cutoffs exactly at the ANSI bandedges
+    f_lower_design = fc / bandwidth_factor
+    f_upper_design = fc * bandwidth_factor
     
     nyquist = fs / 2.0
     
+    # Prevent Nyquist crash on high bands
     if f_upper_design >= nyquist * 0.99:
         f_upper_design = nyquist * 0.99
         if f_lower_design >= f_upper_design:
             raise ValueError(f"Band centered at {fc:.1f} Hz is too close to Nyquist ({nyquist} Hz)")
 
+    # scipy.signal.butter uses N as the order of the lowpass prototype.
+    # For a bandpass, the resulting filter will have 2*N poles.
     sos = scipy.signal.butter(
         N=order, 
         Wn=[f_lower_design, f_upper_design], 
