@@ -1,150 +1,170 @@
+"""
+Plots the frequency response of the octave (and optionally 1/3-octave) filter
+bank against the IEC 61260-1 / ANSI S1.11 Class 1 spectral mask.
+
+Three representative bands are shown (63 Hz, 1 kHz, 8 kHz) to demonstrate
+compliance across the audio band.
+
+Run from the repo root:
+    python tests/plot_ansi_filters.py
+    python tests/plot_ansi_filters.py third     # 1/3-octave bank
+"""
 import sys
-import os
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
 import matplotlib.pyplot as plt
-import scipy.signal as sg
 
-# --- Path Setup ---
-# Ensure we can import from the 'vslm' package
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.insert(0, parent_dir)
+from vslm.dsp.filters.octave_filters import OctaveFilterBank
 
-from vslm.filters.octave_filters import OctaveFilterBank
-from vslm.constants import BandResolution
 
-def get_class1_mask(fc):
+# ── IEC 61260-1 Class 1 spectral mask ────────────────────────────────────────
+#
+# IEC 61260-1 defines the mask in terms of a normalised frequency Ω:
+#
+#   Ω = (f/fc − fc/f) / (G^(1/2b) − G^(−1/2b))
+#
+# where G = 2 (base-2 system) and b = 1 for octave, b = 3 for 1/3-octave.
+# The bandwidth factor Δ = G^(1/2b) − G^(−1/2b) differs between the two:
+#   octave:      Δ = √2 − 1/√2  ≈ 0.707
+#   1/3-octave:  Δ = 2^(1/6) − 2^(−1/6) ≈ 0.232
+#
+# The dB limits at each Ω breakpoint are the same for both resolutions
+# (Class 1): ±0.3 dB passband (|Ω|≤1), −16.1 dB at |Ω|=2, −36.5 at |Ω|=3,
+# −54.5 at |Ω|=4, with a deep stopband floor of −70 dB (octave) or −60 dB
+# (1/3-octave) beyond |Ω|=5.
+#
+# _omega_to_r() converts Ω → r = f/fc so the mask can be plotted in Hz.
+
+def _omega_to_r(omega: float, delta: float) -> float:
     """
-    Returns frequency arrays and limit values for the ANSI S1.11 / IEC 61260 Class 1 
-    Octave Band spectral mask.
+    Convert normalised frequency Ω to the frequency ratio r = f/fc.
+
+    Methodology
+    -----------
+    IEC 61260-1 defines Ω implicitly via:
+
+        Ω = (r − 1/r) / Δ     where r = f/fc
+
+    Solving for r:
+
+        r − 1/r = Ω·Δ
+        r² − Ω·Δ·r − 1 = 0                 (multiply through by r)
+        r = [Ω·Δ + sqrt((Ω·Δ)² + 4)] / 2   (quadratic formula, positive root)
+
+    Only the positive root is physically meaningful (r = f/fc > 0).
     """
-    # Ratios (f / fc) for Class 1 Octave Band (Base 2 definition G=2)
-    # derived from IEC 61260-1:2014 Table 2
-    
-    # --- Upper Limit (Maximum Permitted Transmission) ---
-    r_upper = np.array([
-        0.001,  # Extension
-        0.125,  # 3 Octaves down (f/fc = 1/8)
-        0.25,   # 2 Octaves down (f/fc = 1/4)
-        0.5,    # 1 Octave down (f/fc = 1/2)
-        0.7071, # Lower Band Edge (1/sqrt(2))
-        1.4142, # Upper Band Edge (sqrt(2))
-        2.0,    # 1 Octave up
-        4.0,    # 2 Octaves up
-        8.0,    # 3 Octaves up
-        1000.0  # Extension
-    ])
-    
-    # Limits in dB
-    # -70dB is required at +/- 3 octaves for Class 1 (approximate practical limit)
-    # -61dB at +/- 2 octaves
-    # -16.1dB at +/- 1 octave
-    l_upper = np.array([
-        -70.0, # < 0.125
-        -70.0, # 0.125
-        -61.0, # 0.25
-        -16.1, # 0.5
-        0.3,   # Passband (+0.3)
-        0.3,   # Passband (+0.3)
-        -16.1, # 2.0
-        -61.0, # 4.0
-        -70.0, # 8.0
-        -70.0  # > 8.0
-    ])
-    
-    # --- Lower Limit (Minimum Permitted Transmission) ---
-    r_lower = np.array([
-        0.7071, # Lower Edge
-        1.4142  # Upper Edge
-    ])
-    
-    l_lower = np.array([
-        -0.3,
-        -0.3
-    ])
-    
-    # Convert Ratios to Frequency
-    f_upper = r_upper * fc
-    f_lower = r_lower * fc
-    
-    return f_upper, l_upper, f_lower, l_lower
+    val = omega * delta
+    return (val + np.sqrt(val ** 2 + 4.0)) / 2.0
 
-def plot_octave_response():
-    print("Initializing Octave Filter Bank...")
-    
-    fs = 48000
-    
-    # --- UPDATE: Use Order 24 to meet Class 1 Requirements ---
-    # Order 6 is too shallow for the strict IEC 61260 transition bands.
-    filter_order = 24 
-    
-    # Create the bank
-    bank = OctaveFilterBank(fs, resolution=BandResolution.OCTAVE, order=filter_order)
-    
-    print(f"Generated {len(bank.frequencies)} bands: {bank.frequencies}")
 
-    # --- Generate Frequency Response via Impulse ---
-    # Use 2^17 samples for high frequency resolution in FFT
-    n_samples = 131072 
-    impulse = np.zeros(n_samples)
-    impulse[0] = 1.0 
-    
-    # Initialize state (flush filters)
+def _class1_mask(fc: float, resolution: str = "octave"
+                 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return (f_upper, limit_upper, f_lower, limit_lower) for the IEC 61260-1
+    Class 1 spectral mask centred on *fc*, correctly scaled for *resolution*
+    ('octave' or 'third').
+    """
+    b     = 1 if resolution == "octave" else 3
+    delta = 2 ** (1 / (2 * b)) - 2 ** (-1 / (2 * b))
+    floor = -70.0 if resolution == "octave" else -60.0
+
+    # Ω breakpoints and their upper-limit values (positive side only; mirrored below)
+    omegas = np.array([0.0,  1.0,   2.0,    3.0,    4.0,    5.0])
+    limits = np.array([0.3,  0.3, -16.1,  -36.5,  -54.5,  floor])
+
+    r_pos = np.array([_omega_to_r(w, delta) for w in omegas])
+    r_neg = 1.0 / r_pos[::-1]           # mirror: r_neg[i] = 1/r_pos[n-i]
+
+    r_up = np.concatenate([[0.001], r_neg[:-1], r_pos[1:], [1000.0]])
+    l_up = np.concatenate([[floor], limits[::-1][:-1], limits[1:], [floor]])
+
+    # Passband lower limit: 0 dB at band edges (|Ω|=1)
+    r_lo = np.array([1.0 / r_pos[1], r_pos[1]])
+    l_lo = np.array([-0.3, -0.3])
+
+    return r_up * fc, l_up, r_lo * fc, l_lo
+
+
+def plot_filter_bank(resolution: str = "octave", fs: int = 48000,
+                     order: int = 24) -> None:
+    """
+    Plot filter bank frequency responses against the IEC 61260-1 Class 1 mask.
+
+    Methodology — impulse-response FFT
+    -----------------------------------
+    The frequency response of each bandpass filter is obtained by feeding a
+    unit impulse (x[0]=1, x[n>0]=0) through the filter and computing the
+    DFT of the output:
+
+        H(e^jω) = DFT{ h[n] }     (h = impulse response)
+
+    Using n=131072 points gives a frequency resolution of fs/131072 ≈ 0.37 Hz
+    at 48 kHz, which is fine enough to resolve the filter's passband shape
+    accurately.  This avoids the need to evaluate the SOS coefficients with
+    sosfreqz and is numerically equivalent for stable filters.
+
+    The response is normalised to 0 dB at the centre frequency by subtracting
+    the FFT magnitude at the bin closest to fc.
+    """
+    bank = OctaveFilterBank(fs, resolution=resolution, order=order)
+    print(f"{len(bank.frequencies)} bands: {bank.frequencies}")
+
+    # 2^17 = 131072 points → frequency resolution ≈ 0.37 Hz at 48 kHz
+    n = 131072
+    impulse = np.zeros(n)
+    impulse[0] = 1.0   # unit impulse at t=0
     bank.initialize_state(np.zeros(1024))
-    
-    # Process
-    output_bands = bank.process_chunk(impulse)
-    
-    # Compute FFT
-    freqs = np.fft.rfftfreq(n_samples, d=1/fs)
-    
-    plt.figure(figsize=(14, 9))
-    
-    # --- Plot specific bands ---
-    target_freqs = [63.0, 1000.0, 8000.0]
-    colors = ['r', 'g', 'b']
-    
-    for i, target in enumerate(target_freqs):
-        idx = np.argmin(np.abs(bank.frequencies - target))
-        actual_fc = bank.frequencies[idx]
-        
-        # Get response
-        resp = np.fft.rfft(output_bands[:, idx])
-        mag_db = 20 * np.log10(np.abs(resp) + 1e-15)
-        
-        # Normalize to peak for clear shape comparison
-        peak_idx = np.argmin(np.abs(freqs - actual_fc))
-        ref_level = mag_db[peak_idx]
-        norm_mag_db = mag_db - ref_level
-        
-        col = colors[i % len(colors)]
-        
-        # Plot Filter Response
-        plt.semilogx(freqs, norm_mag_db, color=col, linewidth=2, label=f'Band {actual_fc:.0f} Hz')
-        
-        # --- Overlay Class 1 Mask ---
-        mask_f_up, mask_l_up, mask_f_lo, mask_l_lo = get_class1_mask(actual_fc)
-        
-        lbl_up = 'Class 1 Max Limit' if i == 0 else None
-        lbl_lo = 'Class 1 Min Limit' if i == 0 else None
-            
-        plt.plot(mask_f_up, mask_l_up, 'k--', linewidth=1.5, label=lbl_up, alpha=0.8)
-        plt.plot(mask_f_lo, mask_l_lo, 'k-.', linewidth=1.5, label=lbl_lo, alpha=0.8)
-        
-        plt.text(actual_fc, 2.5, f"{actual_fc:.0f}Hz", ha='center', color=col, fontweight='bold')
+    output = bank.process_chunk(impulse)   # shape (n, n_bands)
+    freqs  = np.fft.rfftfreq(n, d=1 / fs)
 
-    # Formatting
-    plt.title(f"Octave Filter Bank Response vs ANSI S1.11 / IEC 61260 Class 1 Limits\n(Fs={fs} Hz, Order={filter_order})", fontsize=14)
-    plt.xlabel("Frequency (Hz)", fontsize=12)
-    plt.ylabel("Attenuation (dB)", fontsize=12)
-    plt.grid(True, which='both', alpha=0.3, linestyle='--')
-    
-    plt.xlim(10, 24000)
-    plt.ylim(-100, 10) # Extended Y-range to see deep stopband
-    
-    plt.legend(loc='lower center', ncol=3)
+    target_bands = [63.0, 1000.0, 8000.0]
+    colors = ["tab:red", "tab:green", "tab:blue"]
+
+    plt.figure(figsize=(14, 8))
+
+    for color, target in zip(colors, target_bands):
+        idx    = np.argmin(np.abs(bank.frequencies - target))
+        fc     = bank.frequencies[idx]
+        resp   = np.fft.rfft(output[:, idx])
+        mag_db = 20 * np.log10(np.abs(resp) + 1e-15)
+
+        # Normalise to 0 dB at centre frequency
+        ref_idx  = np.argmin(np.abs(freqs - fc))
+        mag_db  -= mag_db[ref_idx]
+
+        plt.semilogx(freqs, mag_db, color=color, linewidth=2,
+                     label=f"{fc:.0f} Hz band")
+
+        # Class 1 mask — correctly scaled for this resolution
+        f_up, l_up, f_lo, l_lo = _class1_mask(fc, resolution)
+        kw_up = {"color": "k", "linestyle": "--", "linewidth": 1.5, "alpha": 0.75}
+        kw_lo = {"color": "k", "linestyle": "-.", "linewidth": 1.5, "alpha": 0.75}
+        plt.plot(f_up, l_up, **kw_up,
+                 label="Class 1 max limit" if target == target_bands[0] else None)
+        plt.plot(f_lo, l_lo, **kw_lo,
+                 label="Class 1 min limit" if target == target_bands[0] else None)
+
+        plt.text(fc, 2.5, f"{fc:.0f} Hz", ha="center", color=color,
+                 fontweight="bold", fontsize=9)
+
+    res_label = "Octave" if resolution == "octave" else "1/3-Octave"
+    plt.title(
+        f"{res_label} Filter Bank — IEC 61260-1 / ANSI S1.11 Class 1 Compliance\n"
+        f"(Fs = {fs} Hz, filter order = {order})",
+        fontsize=13,
+    )
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Attenuation (dB)")
+    plt.xlim(10, fs / 2)
+    plt.ylim(-110, 10)
+    plt.grid(True, which="both", linestyle="--", alpha=0.35)
+    plt.legend(loc="lower center", ncol=3)
     plt.tight_layout()
     plt.show()
 
+
 if __name__ == "__main__":
-    plot_octave_response()
+    resolution = sys.argv[1] if len(sys.argv) > 1 else "octave"
+    plot_filter_bank(resolution=resolution)
