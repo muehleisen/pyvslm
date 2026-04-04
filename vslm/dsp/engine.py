@@ -191,7 +191,7 @@ class StreamProcessor:
         weighting: str | Weighting     = Weighting.A,
         do_bands: bool                 = False,
         band_resolution: str | BandResolution = BandResolution.OCTAVE,
-        band_order: int                = 24,
+        band_order: int                = 8,
         speed: str | ResponseSpeed     = ResponseSpeed.FAST,
         ref_pressure: float            = 20e-6,
     ) -> Generator[dict[str, Any], None, None]:

@@ -61,7 +61,7 @@ def get_center_frequencies(resolution: str = "octave", base: int = 10) -> np.nda
 
 
 def design_band_sos(fc: float, fs: float, resolution: str = "third",
-                    order: int = 24) -> np.ndarray:
+                    order: int = 12) -> np.ndarray:
     """
     Design a single Butterworth bandpass filter compliant with ANSI S1.11 Class 1.
 
@@ -69,44 +69,20 @@ def design_band_sos(fc: float, fs: float, resolution: str = "third",
     -----------
     **Band-edge frequencies**
 
-    ANSI S1.11 / IEC 61260-1 defines band edges using the base-2 bandwidth
-    ratio G = 2^(1/b), where b = 1 for octave and b = 3 for 1/3-octave:
+    ANSI S1.11 / IEC 61260-1 defines band edges using the preferred base-10
+    ratio G = 10^(3/10), where b = 1 for octave and b = 3 for 1/3-octave:
 
-        f_lo = fc / G^(1/2b) = fc / 2^(1/(2b))
-        f_hi = fc · G^(1/2b) = fc · 2^(1/(2b))
+        f_lo = fc · G^(−1/(2b)) = fc / G^(1/(2b))
+        f_hi = fc · G^(+1/(2b))
 
-    For octave (b=1):      bw = 2^(1/2) = √2 ≈ 1.4142
-    For 1/3-octave (b=3):  bw = 2^(1/6)      ≈ 1.1225
+    For octave (b=1):      bw = G^(1/2) = 10^(3/20) ≈ 1.4125
+    For 1/3-octave (b=3):  bw = G^(1/6) = 10^(1/20) ≈ 1.1220
 
-    **Alpha correction**
-
-    A Butterworth filter of order N has −3 dB attenuation at its cutoff
-    frequency by construction.  The ANSI Class 1 passband tolerance requires
-    ≤ 0.05 dB attenuation *at the nominal band edge*, not at −3 dB.
-
-    To make the −0.05 dB point land exactly at the ANSI edge, the design
-    cutoffs are shifted inward (compressed) by a small factor α:
-
-        α = [(10^(target_dB / 10)) − 1]^(1 / (2·N))
-
-    Derivation: the Butterworth magnitude response at normalised frequency Ω is
-
-        |H(Ω)|² = 1 / [1 + Ω^(2N)]
-
-    Setting |H|² = 10^(−target_dB / 10) at Ω = 1 (the design cutoff) gives
-
-        Ω_target^(2N) = 10^(target_dB / 10) − 1
-        Ω_target      = [(10^(target_dB / 10)) − 1]^(1 / (2N))
-
-    The ANSI band edge must map to Ω_target = 1, so the design cutoff must
-    be at f_edge / α — i.e. we divide the lower edge by α and multiply the
-    upper edge by α to widen the design band, which shifts the −0.05 dB
-    point back to the true ANSI edge.  Equivalently:
-
-        f_lo_design = f_lo_ansi · α      (move design cutoff *down* from ANSI edge)
-        f_hi_design = f_hi_ansi / α      (move design cutoff *up* from ANSI edge)
-
-    With order = 24 and target = 0.05 dB, α ≈ 0.9967 — a very small shift.
+    These band edges are used directly as the Butterworth −3 dB cutoff
+    frequencies.  The ANSI Class 1 tolerance at the band edge (G^±0.5)
+    allows attenuation between −0.3 dB and +5.0 dB, so placing the −3 dB
+    point there is well within spec.  For a high-order filter the transition
+    band then rolls off rapidly enough to meet all stopband requirements.
 
     **Filter design**
 
@@ -118,23 +94,18 @@ def design_band_sos(fc: float, fs: float, resolution: str = "third",
         fc:         Nominal centre frequency in Hz.
         fs:         Sample rate in Hz.
         resolution: ``'octave'`` or ``'third'``.
-        order:      Filter order (default 24 — good Class 1 margin).
+        order:      Filter order (default 8).
 
     Returns:
         SOS array of shape (order, 6).
     """
-    # Bandwidth ratio: half-power bandwidth relative to fc
-    # octave → fc / √2 to fc · √2;   third → fc / 2^(1/6) to fc · 2^(1/6)
-    bw       = 2.0 ** (1.0 / 2.0) if resolution == "octave" else 2.0 ** (1.0 / 6.0)
-    f_lo_ansi = fc / bw
-    f_hi_ansi = fc * bw
-
-    # Alpha correction: shift design cutoffs so the Butterworth −0.05 dB
-    # point lands at the ANSI band edge (see derivation above)
-    target_atten_db = 0.05
-    alpha = ((10.0 ** (target_atten_db / 10.0)) - 1.0) ** (1.0 / (2.0 * order))
-    f_lo = f_lo_ansi * alpha
-    f_hi = f_hi_ansi / alpha
+    # ANSI S1.11 preferred base-10 band edges: G = 10^(3/10)
+    # octave (b=1):     edges at fc · G^(±1/2) = fc · 10^(±3/20)
+    # 1/3-octave (b=3): edges at fc · G^(±1/6) = fc · 10^(±1/20)
+    G   = 10.0 ** (3.0 / 10.0)
+    bw  = G ** (0.5 if resolution == "octave" else 1.0 / 6.0)
+    f_lo = fc / bw
+    f_hi = fc * bw
 
     # Cap upper edge to 99 % of Nyquist to stay within the stable region of
     # the bilinear transform
@@ -165,13 +136,14 @@ class OctaveFilterBank:
     long recordings without resetting the filter memory.
     """
 
-    def __init__(self, fs: float, resolution: str = "octave", order: int = 24):
+    def __init__(self, fs: float, resolution: str = "octave", order: int = 12):
         self.fs         = fs
         self.resolution = resolution
 
         # Upper limit: exclude bands whose upper ANSI edge would exceed 95 %
         # of Nyquist.  Beyond that point Butterworth accuracy degrades rapidly.
-        bw          = 2.0 ** (1.0 / 2.0) if resolution == "octave" else 2.0 ** (1.0 / 6.0)
+        G           = 10.0 ** (3.0 / 10.0)
+        bw          = G ** (0.5 if resolution == "octave" else 1.0 / 6.0)
         upper_limit = (fs / 2.0) / bw * 0.95
 
         all_centers   = get_center_frequencies(resolution)

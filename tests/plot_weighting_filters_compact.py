@@ -102,6 +102,17 @@ def main() -> None:
     ax_amag.semilogx(f, ha_ref_db, "k--", linewidth=2, label="Analogue ref", alpha=0.65)
     ax_cmag.semilogx(f, hc_ref_db, "k--", linewidth=2, label="Analogue ref", alpha=0.65)
 
+    # Class 1 tolerance shading on magnitude plots (± from analogue reference)
+    wn_tol = _TOL_F * 2 * np.pi
+    _, ha_tol = sg.freqs_zpk(Za, Pa, Ka, wn_tol)
+    _, hc_tol = sg.freqs_zpk(Zc, Pc, Kc, wn_tol)
+    ha_tol_db = 20 * np.log10(np.abs(ha_tol) + 1e-15)
+    hc_tol_db = 20 * np.log10(np.abs(hc_tol) + 1e-15)
+    ax_amag.fill_between(_TOL_F, ha_tol_db - _LO1, ha_tol_db + _UP1,
+                         color="red", alpha=0.15, label="Class 1 tolerance")
+    ax_cmag.fill_between(_TOL_F, hc_tol_db - _LO1, hc_tol_db + _UP1,
+                         color="red", alpha=0.15, label="Class 1 tolerance")
+
     colors     = plt.cm.jet(np.linspace(0, 0.9, len(SUPPORTED_FS)))
     linestyles = ["-", "--", "-.", ":"] * 4
 
@@ -134,16 +145,12 @@ def main() -> None:
         except Exception as e:
             print(f"  Skipping {fs} Hz: {e}")
 
-    # Tolerance overlays on error plots
+    # Tolerance overlays on error plots — both standards as shaded bands
     for ax in (ax_aerr, ax_cerr):
         ax.fill_between(_TOL_F, -_LO0, _UP0,
-                        color="gray", alpha=0.15, label="Type 0 range")
-        ax.semilogx(_TOL_F,  _UP1, "r-", linewidth=1.8, alpha=0.45,
-                    label="Class 1 (IEC 61672-1)")
-        ax.semilogx(_TOL_F, -_LO1, "r-", linewidth=1.8, alpha=0.45)
-        ax.semilogx(_TOL_F,  _UP0, "k:", linewidth=1.5, alpha=0.65,
-                    label="Type 0 (ANSI S1.4)")
-        ax.semilogx(_TOL_F, -_LO0, "k:", linewidth=1.5, alpha=0.65)
+                        color="gray", alpha=0.25, label="ANSI S1.4 Type 0")
+        ax.fill_between(_TOL_F, -_LO1, _UP1,
+                        color="red",  alpha=0.20, label="IEC 61672-1 Class 1")
 
     # ── Format axes ────────────────────────────────────────────────────────────
     for ax, title in (
@@ -167,6 +174,7 @@ def main() -> None:
     ax_cerr.set_ylim(-2, 2)
 
     ax_amag.legend(fontsize="x-small", ncol=2)
+    ax_cmag.legend(fontsize="x-small", ncol=2)
     ax_aerr.legend(loc="upper left", fontsize="x-small")
 
     fig.suptitle("Weighting Filter Compliance — MZT Hybrid SOS", fontsize=14)
