@@ -119,6 +119,27 @@ class MainWindow(QMainWindow):
         layout_btns.addWidget(self.btn_cal)
 
         layout_file.addLayout(layout_btns)
+<<<<<<< Updated upstream
+=======
+        
+        # --- Playback Buttons (New Row) ---
+        layout_play = QHBoxLayout()
+        layout_play.setSpacing(5)
+        
+        self.btn_play = QPushButton("Play\nSelection")
+        self.btn_play.setMinimumHeight(40)
+        self.btn_play.clicked.connect(self.on_play_click)
+        self.btn_play.setEnabled(False)
+        layout_play.addWidget(self.btn_play)
+        
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setMinimumHeight(40)
+        self.btn_stop.clicked.connect(self.on_stop_click)
+        self.btn_stop.setEnabled(False) # Enabled when playing potentially, but for now enables with file
+        layout_play.addWidget(self.btn_stop)
+        
+        layout_file.addLayout(layout_play)
+>>>>>>> Stashed changes
 
         self.lbl_info = QLabel()
         self.lbl_info.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
@@ -249,7 +270,10 @@ class MainWindow(QMainWindow):
         self.combo_spec_cmap = QComboBox()
         self.combo_spec_cmap.addItems(palette_options)
         self.combo_spec_cmap.setCurrentText("plasma")
+<<<<<<< Updated upstream
         # Connect signal for dynamic update
+=======
+>>>>>>> Stashed changes
         self.combo_spec_cmap.currentTextChanged.connect(self.on_cmap_changed)
         lay_spec.addWidget(self.combo_spec_cmap)
         
@@ -377,11 +401,23 @@ class MainWindow(QMainWindow):
         self.stack_settings.setCurrentIndex(idx)
 
     def on_cmap_changed(self, text):
+<<<<<<< Updated upstream
         """Dynamic update for colormap change."""
+=======
+>>>>>>> Stashed changes
         self.controller.settings.spec_cmap = text
         if self.controller.last_results:
             self._redraw_plot()
 
+<<<<<<< Updated upstream
+=======
+    def on_play_click(self):
+        self.controller.play_audio()
+
+    def on_stop_click(self):
+        self.controller.stop_audio()
+
+>>>>>>> Stashed changes
     def on_btn_load_click(self):
         start_dir = self.controller.settings.last_directory
         fname, _ = QFileDialog.getOpenFileName(self, "Open WAV", start_dir, "WAV Files (*.wav)")
@@ -471,6 +507,11 @@ class MainWindow(QMainWindow):
     def on_file_loaded_update_ui(self, path, info):
         self.btn_select.setEnabled(True)
         self.btn_analyze.setEnabled(True)
+<<<<<<< Updated upstream
+=======
+        self.btn_play.setEnabled(True)  # <--- Enable Play
+        self.btn_stop.setEnabled(True)  # <--- Enable Stop
+>>>>>>> Stashed changes
         self.menu_export.setEnabled(False)
         self._update_file_label_text(info)
 
@@ -548,6 +589,17 @@ class MainWindow(QMainWindow):
         self.btn_cal.setEnabled(enabled) 
         self.combo_leq_int.setEnabled(enabled)
         
+<<<<<<< Updated upstream
+=======
+        # Play controls should remain enabled if file loaded, even if analysis runs?
+        # Typically yes, you might want to listen while analyzing.
+        # But toggle_inputs is called with False during analysis.
+        # If we want async play, we should probably force them enabled or skip disabling them.
+        # For safety, let's let them be disabled during analysis to avoid file access conflicts if any.
+        self.btn_play.setEnabled(enabled)
+        self.btn_stop.setEnabled(enabled)
+        
+>>>>>>> Stashed changes
         can_export = (len(self.controller.last_results) > 0)
         self.menu_export.setEnabled(enabled and can_export)
         
