@@ -123,6 +123,20 @@ class MainWindow(QMainWindow):
         row_btns.addWidget(self._btn_select)
         row_btns.addWidget(self._btn_cal)
 
+        row_play = QHBoxLayout()
+        self._btn_play  = QPushButton("Play")
+        self._btn_pause = QPushButton("Pause")
+        self._btn_stop  = QPushButton("Stop")
+        for btn in (self._btn_play, self._btn_pause, self._btn_stop):
+            btn.setMinimumHeight(36)
+            btn.setEnabled(False)
+        self._btn_play.clicked.connect(self._on_play)
+        self._btn_pause.clicked.connect(self._on_pause)
+        self._btn_stop.clicked.connect(self._on_stop)
+        row_play.addWidget(self._btn_play)
+        row_play.addWidget(self._btn_pause)
+        row_play.addWidget(self._btn_stop)
+
         self._lbl_info = QLabel("No file loaded.")
         self._lbl_info.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
         self._lbl_info.setAlignment(Qt.AlignLeft | Qt.AlignTop)
@@ -130,6 +144,7 @@ class MainWindow(QMainWindow):
 
         vf = QVBoxLayout()
         vf.addLayout(row_btns)
+        vf.addLayout(row_play)
         vf.addWidget(self._lbl_info)
         grp_file.setLayout(vf)
         col.addWidget(grp_file)
@@ -292,6 +307,7 @@ class MainWindow(QMainWindow):
         c.sig_status_message.connect(self.statusBar().showMessage)
         c.sig_export_done.connect(lambda: QMessageBox.information(
             self, "Export", "Results exported successfully."))
+        c.sig_playback_state_changed.connect(self._on_playback_state_changed)
 
     # ------------------------------------------------------------------
     # Settings sync
@@ -407,6 +423,15 @@ class MainWindow(QMainWindow):
             self.controller.update_calibration(dlg.get_factor())
             self._update_file_label()
 
+    def _on_play(self) -> None:
+        self.controller.play_audio()
+
+    def _on_pause(self) -> None:
+        self.controller.pause_audio()
+
+    def _on_stop(self) -> None:
+        self.controller.stop_audio()
+
     def _on_analyze(self) -> None:
         if self._btn_analyze.text() == "STOP":
             self.controller.stop_analysis()
@@ -463,8 +488,12 @@ class MainWindow(QMainWindow):
 
     @Slot(object, object)
     def _on_file_loaded(self, path, info) -> None:
+        self.controller.stop_audio()   # reset any in-progress playback
         self._btn_select.setEnabled(True)
         self._btn_analyze.setEnabled(True)
+        self._btn_play.setEnabled(True)
+        self._btn_pause.setEnabled(False)
+        self._btn_stop.setEnabled(False)
         self._m_export.setEnabled(False)
         self._update_file_label(info)
 
@@ -488,6 +517,14 @@ class MainWindow(QMainWindow):
         self._progress.setValue(0)
         self._m_export.setEnabled(bool(results))
         self._redraw()
+
+    @Slot(str)
+    def _on_playback_state_changed(self, state: str) -> None:
+        playing = state == "playing"
+        paused  = state == "paused"
+        self._btn_play.setEnabled(not playing)
+        self._btn_pause.setEnabled(playing)
+        self._btn_stop.setEnabled(playing or paused)
 
     @Slot(str)
     def _on_error(self, msg: str) -> None:
