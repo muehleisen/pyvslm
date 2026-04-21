@@ -6,9 +6,13 @@ Communicates with the GUI exclusively via Qt signals — no GUI imports here.
 """
 from __future__ import annotations
 
+import time
+import threading
 import traceback
 from pathlib import Path
 
+import numpy as np
+import sounddevice as sd
 import soundfile as sf
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -30,6 +34,8 @@ class VSLMController(QObject):
     # Export / settings
     sig_export_done    = Signal()
     sig_status_message = Signal(str)
+    # Playback state: "playing" | "paused" | "stopped"
+    sig_playback_state_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -42,6 +48,14 @@ class VSLMController(QObject):
         self.cal_factor: float        = self.settings.calibration_factor
         self.last_results: list       = []
         self._worker: AnalysisWorker | None = None
+
+        # Playback state
+        self._play_data:         np.ndarray | None = None
+        self._play_fs:           int               = 0
+        self._play_frame_offset: int               = 0
+        self._play_wall_time:    float             = 0.0
+        self._is_playing:        bool              = False
+        self._is_paused:         bool              = False
 
     # ------------------------------------------------------------------
     # File management
@@ -71,6 +85,91 @@ class VSLMController(QObject):
         self.cal_factor = factor
         self.settings.calibration_factor = factor
         self.sig_status_message.emit(f"Calibration factor: {factor:.4f}")
+
+    # ------------------------------------------------------------------
+    # Playback
+    # ------------------------------------------------------------------
+
+    def play_audio(self) -> None:
+        """Play the selected range, or resume from pause position."""
+        if not self.filepath:
+            return
+        if self._is_paused and self._play_data is not None:
+            self._resume_playback()
+            return
+        try:
+            info = sf.info(str(self.filepath))
+            fs   = info.samplerate
+            start_frame = int(self.start_time * fs)
+            stop_frame  = int(self.end_time * fs) if self.end_time else None
+            if stop_frame is not None and stop_frame <= start_frame:
+                self.sig_status_message.emit("Invalid selection range.")
+                return
+            data, _ = sf.read(str(self.filepath), start=start_frame,
+                               stop=stop_frame, always_2d=True)
+        except Exception as e:
+            self.sig_analysis_error.emit(f"Playback error: {e}")
+            return
+
+        self._play_data         = data
+        self._play_fs           = fs
+        self._play_frame_offset = 0
+        self._is_paused         = False
+        sd.stop()
+        sd.play(data, fs, blocking=False)
+        self._play_wall_time = time.monotonic()
+        self._is_playing     = True
+        self.sig_playback_state_changed.emit("playing")
+        end_t = self.end_time or info.duration
+        self.sig_status_message.emit(
+            f"Playing {self.start_time:.2f}s – {end_t:.2f}s…"
+        )
+        threading.Thread(target=self._monitor_playback, daemon=True).start()
+
+    def pause_audio(self) -> None:
+        """Freeze playback; resume position is preserved for Play."""
+        if not self._is_playing:
+            return
+        elapsed = int((time.monotonic() - self._play_wall_time) * self._play_fs)
+        data_len = len(self._play_data) if self._play_data is not None else 0
+        self._play_frame_offset = min(self._play_frame_offset + elapsed, data_len)
+        sd.stop()
+        self._is_playing = False
+        self._is_paused  = True
+        self.sig_playback_state_changed.emit("paused")
+        self.sig_status_message.emit("Paused.")
+
+    def stop_audio(self) -> None:
+        """Stop playback and reset to start of selection."""
+        sd.stop()
+        self._play_data         = None
+        self._play_frame_offset = 0
+        self._is_playing        = False
+        self._is_paused         = False
+        self.sig_playback_state_changed.emit("stopped")
+        self.sig_status_message.emit("Playback stopped.")
+
+    def _resume_playback(self) -> None:
+        remaining = self._play_data[self._play_frame_offset:]
+        if len(remaining) == 0:
+            self.stop_audio()
+            return
+        sd.play(remaining, self._play_fs, blocking=False)
+        self._play_wall_time = time.monotonic()
+        self._is_playing     = True
+        self._is_paused      = False
+        self.sig_playback_state_changed.emit("playing")
+        self.sig_status_message.emit("Resumed…")
+        threading.Thread(target=self._monitor_playback, daemon=True).start()
+
+    def _monitor_playback(self) -> None:
+        """Daemon thread: detect natural end of playback and emit stopped."""
+        sd.wait()
+        if self._is_playing:
+            self._is_playing        = False
+            self._play_frame_offset = 0
+            self._play_data         = None
+            self.sig_playback_state_changed.emit("stopped")
 
     # ------------------------------------------------------------------
     # Analysis
@@ -185,4 +284,10 @@ class VSLMController(QObject):
         if self._worker and self._worker.isRunning():
             self._worker.stop()
             self._worker.wait()
+        self._is_playing = False
+        self._is_paused  = False
+        try:
+            sd.stop()
+        except Exception:
+            pass
         self._settings_mgr.save(self.settings)
