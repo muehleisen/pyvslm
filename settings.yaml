@@ -1,0 +1,32 @@
+# Saved by VSLM on 2026-05-11 03:55:49
+analysis_mode_index: 1
+band_filter_order: 24
+block_size_ms: 100.0
+calibration_factor: 1.7520914808441688
+current_dose_standard: OSHA
+dose_standards:
+  NIOSH:
+    criterion_level: 85.0
+    exchange_rate: 3.0
+    shift_hours: 8.0
+    threshold_level: 80.0
+  OSHA:
+    criterion_level: 90.0
+    exchange_rate: 5.0
+    shift_hours: 8.0
+    threshold_level: 80.0
+last_directory: C:\Users\ralph\git\pyvslm\wav
+leq_interval_index: 1
+lp_interval_index: 0
+plot_autoscale: true
+plot_ymax: 60.0
+plot_ymin: 0.0
+psd_nfft: 8192
+psd_window: Bartlett
+ref_pressure: 2.0e-05
+spec_cmap: viridis
+spec_dt: 1.0
+spec_nfft: 2048
+spec_window: Hanning
+speed: Slow
+weighting: A
