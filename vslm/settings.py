@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from .constants import Weighting, ResponseSpeed
 
-DEFAULT_SETTINGS_PATH = Path.home() / ".vslm_settings.yaml"
+DEFAULT_SETTINGS_PATH = Path(__file__).parent.parent / "settings.yaml"
 
 
 class DoseStandard(BaseModel):
