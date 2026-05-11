@@ -263,10 +263,7 @@ class StreamProcessor:
             result: dict[str, Any] = {"time": current_time, "leq": leq, "lp": lp}
 
             if band_bank:
-                # Band analysis uses the *unweighted* signal — the band filters
-                # provide the spectral selectivity; A/C weighting would be
-                # double-applied if done here as well.
-                band_out = band_bank.process_chunk(chunk)
+                band_out = band_bank.process_chunk(weighted)
                 # Per-band Leq: mean squared output of each bandpass filter
                 ms_bands = np.mean(band_out ** 2, axis=0)
                 result["bands"]      = 10.0 * np.log10(ms_bands / (ref_pressure ** 2) + 1e-30)
