@@ -160,17 +160,6 @@ class MainWindow(QMainWindow):
         grp_w.setLayout(row_w)
         col.addWidget(grp_w)
 
-        # Speed group
-        grp_s = QGroupBox("Speed (Lp mode)")
-        row_s = QHBoxLayout()
-        self._bg_speed = QButtonGroup()
-        for i, label in enumerate(["Slow", "Fast", "Impulse"]):
-            rb = QRadioButton(label)
-            self._bg_speed.addButton(rb, i)
-            row_s.addWidget(rb)
-        grp_s.setLayout(row_s)
-        col.addWidget(grp_s)
-
         # Analysis mode + per-mode settings
         grp_mode = QGroupBox("Analysis Mode")
         mode_row = QHBoxLayout()
@@ -190,6 +179,10 @@ class MainWindow(QMainWindow):
         pg_lp = QWidget()
         vl = QVBoxLayout(pg_lp)
         vl.setContentsMargins(0, 0, 0, 0)
+        vl.addWidget(QLabel("Measurement speed:"))
+        self._combo_lp_speed = QComboBox()
+        self._combo_lp_speed.addItems(["Slow", "Fast", "Impulse"])
+        vl.addWidget(self._combo_lp_speed)
         vl.addWidget(QLabel("Plot interval:"))
         self._combo_lp_interval = QComboBox()
         for key, (label, _) in LEQ_INTERVAL_MAP.items():
@@ -325,14 +318,7 @@ class MainWindow(QMainWindow):
         else:
             self._bg_weight.button(0).setChecked(True)
 
-        # Speed
-        sp_text = str(s.speed)
-        for btn in self._bg_speed.buttons():
-            if btn.text() == sp_text:
-                btn.setChecked(True)
-                break
-        else:
-            self._bg_speed.button(1).setChecked(True)
+        self._combo_lp_speed.setCurrentText(str(s.speed))
 
         self._bg_mode.button(s.analysis_mode_index).setChecked(True)
 
@@ -357,9 +343,7 @@ class MainWindow(QMainWindow):
         w_btn = self._bg_weight.checkedButton()
         if w_btn:
             s.weighting = w_btn.text()
-        sp_btn = self._bg_speed.checkedButton()
-        if sp_btn:
-            s.speed = sp_btn.text()
+        s.speed = self._combo_lp_speed.currentText()
 
         s.analysis_mode_index  = self._bg_mode.checkedId()
         s.lp_interval_index    = self._combo_lp_interval.currentIndex()
@@ -576,9 +560,8 @@ class MainWindow(QMainWindow):
         s        = self.controller.settings
         mode_id  = self._bg_mode.checkedId()
         w_btn    = self._bg_weight.checkedButton()
-        sp_btn   = self._bg_speed.checkedButton()
         weighting = w_btn.text() if w_btn else "A"
-        speed     = sp_btn.text() if sp_btn else "Fast"
+        speed     = self._combo_lp_speed.currentText()
         dose_params = s.dose_standards.get(s.current_dose_standard)
 
         ResultPlotter.plot(

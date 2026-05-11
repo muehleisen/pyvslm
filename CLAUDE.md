@@ -5,20 +5,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 **pyvslm** is a Python-based Virtual Sound Level Meter (VSLM) — a port of the MATLAB `vslm.m` application.
-The active implementation lives in the **root directory**. 
+The active implementation lives in the **root directory**.
 
 ---
 
 ## Environment Setup
 
-These instructions use minoconda to create a new python environment.  
-
-Instructions will be added for other methods soon
+Uses miniconda to manage the Python environment.
 
 ```bash
 conda create -n pyvslm -c conda-forge python=3.12 numpy scipy matplotlib pyside6 pysoundfile python-sounddevice numba pydantic pyyaml pyinstaller pytest
 conda activate pyvslm
 ```
+
+Always install packages with `conda install -c conda-forge`; only use pip if a package is unavailable there.
 
 ## Running the Application
 
@@ -29,22 +29,13 @@ python run_pyvslm.py
 ## Running Tests
 
 ```bash
-# Run all tests
 python -m pytest tests/
-
-# Run a single file
-python -m pytest tests/test_engine.py
-
-# Run a specific test
-python -m pytest tests/test_engine.py::TestBroadbandLeq::test_steady_state_leq
-
-# Run with verbose output
+python -m pytest tests/test_engine.py                                       # single file
+python -m pytest tests/test_engine.py::TestBroadbandLeq::test_steady_state_leq  # single test
 python -m pytest tests/ -v
 ```
 
-# Add 
-
-## Filter visualisation plots
+## Filter Visualisation Plots
 
 ```bash
 python tests/plot_weighting_filters.py          # A/C weighting vs IEC 61672-1
@@ -68,7 +59,7 @@ MainWindow (View)                         vslm/gui/main_window.py
 ```
 
 **`StreamProcessor`** (`vslm/dsp/engine.py`) is the core DSP engine. It reads WAV files via `soundfile`,
-applies calibration, and yields results as a generator. Supports six analysis modes:
+applies calibration, and yields results block-by-block as a generator. Supports six analysis modes:
 
 | mode_id | Type |
 |---------|------|
@@ -131,6 +122,26 @@ tests/
 
 ---
 
+## GUI Layout Pattern
+
+The left panel (330 px fixed) has a top section of global controls (file, weighting) and then an
+**Analysis Mode group** that pairs mode radio buttons on the left with a `QStackedWidget` of
+mode-specific options on the right.  Each stack page uses a vertical `QVBoxLayout` of
+`QLabel + QComboBox` pairs followed by a stretch.  Mode-to-page mapping:
+
+| mode_id | Stack page | Controls |
+|---------|-----------|----------|
+| 0 (Lp) | 0 | Plot interval combo |
+| 1 (Leq) | 1 | Leq interval combo + dose standard combo |
+| 2, 3 (bands) | 2 | *(empty)* |
+| 4 (PSD) | 3 | FFT size combo + window combo |
+| 5 (Spectrogram) | 4 | FFT size + slice duration + window + colour palette combos |
+
+The colourmap combo has a live `currentTextChanged` connection that re-draws the spectrogram
+immediately without re-running analysis (`_on_cmap_changed`).
+
+---
+
 ## Key Conventions
 
 - Python 3.12. Uses `match`/`case`, `X | Y` union types, `StrEnum`.
@@ -139,45 +150,14 @@ tests/
 - Weighting filter tests use **IEC 61672-1 Class 1 tolerances** per frequency (not a flat ±0.5 dB).
   Frequencies above `fs / 2.2` are skipped — bilinear transform cannot replicate the analog response there.
 - Tests generate temporary WAV files and clean up after themselves; no installed package required.
-- Always install packages with `conda install -c conda-forge`; only use pip if a package is unavailable there.
 
 ---
 
-## Work History
+## Known Gaps / Future Work
 
-### Session 1 — Initial Python rewrite (claude_conversion branch)
-
-Complete rewrite from the `gemini_conversion/` prototype into a clean root-level package:
-
-**Completed**
-- Restructured package layout: `vslm/dsp/`, `vslm/gui/dialogs/`, `vslm/settings.py`
-- `AppSettings` (Pydantic) with YAML persistence to `~/.vslm_settings.yaml`
-- `StreamProcessor` with six analysis modes: Lp, Leq, octave, 1/3-octave, PSD, spectrogram
-- `WeightingFilter`: IEC 61672-1 A/C/Z using hybrid MZT + minimax optimisation
-- `OctaveFilterBank`: ANSI S1.11 Butterworth bandpass with α-correction for Class 1 compliance
-- `TimeWeightingDetector`: IEC 61672-1 Fast/Slow/Impulse exponential averager
-- `CalibrationDialog`: manual factor entry + from-selection reference tone method
-- `WaveformDialog`: matplotlib SpanSelector for time-region selection
-- CSV export for Lp, Leq (with NIOSH/OSHA dose), and spectrum modes
-- Filter visualisation plot scripts ported from `gemini_conversion/tests/`
-- Fixed IEC 61260-1 spectral mask for 1/3-octave (Ω-based f/fc ratios, −60 dB floor)
-- Fixed weighting filter tests to use per-frequency IEC 61672-1 Class 1 tolerances
-- Added equation-sourcing comments to all DSP modules
-- `README.md` and `CLAUDE.md` written
-
-**Verified working**
-- 18/18 unit tests pass
-- GUI launches, loads WAV, runs all six analysis modes
-- Settings persist across app restarts
-- Calibration dialog (manual + reference tone)
-- Waveform section selector (clamping, selection update)
-- CSV export (Lp, Leq, spectrum)
-
-**Known gaps / future work**
 - No PyInstaller build script yet
-- PSD and spectrogram CSV export not implemented (export_lp/leq/spectrum only)
+- PSD and spectrogram CSV export not implemented
 - No integration test with a real calibrated recording
-- `gui/__init__.py` and `vslm/__init__.py` are minimal stubs — may need exports if packaged
-- `plot_manager.py` Leq plot panel (ax2) stats layout could be improved for long dose standard names
 - Waveform dialog does not restore a previously-saved selection on re-open
 - No dark-mode / HiDPI stylesheet applied
+- `plot_manager.py` Leq plot stats layout could be improved for long dose standard names
