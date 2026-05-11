@@ -33,7 +33,12 @@ python -m pytest tests/test_engine.py
 
 # Run a specific test
 python -m pytest tests/test_engine.py::TestBroadbandLeq::test_steady_state_leq
+
+# Run with verbose output
+python -m pytest tests/ -v
 ```
+
+# Add 
 
 ## Filter visualisation plots
 
