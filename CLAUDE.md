@@ -5,15 +5,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 **pyvslm** is a Python-based Virtual Sound Level Meter (VSLM) — a port of the MATLAB `vslm.m` application.
-The active implementation lives in the **root directory**. `gemini_conversion/` is the prior implementation kept for reference.
+The active implementation lives in the **root directory**. 
 
 ---
 
 ## Environment Setup
 
+These instructions use minoconda to create a new python environment.  
+
+Instructions will be added for other methods soon
+
 ```bash
-conda create -n vslm_env -c conda-forge python=3.12 numpy scipy matplotlib pyside6 pysoundfile python-sounddevice numba pydantic pyyaml pyinstaller pytest
-conda activate vslm_env
+conda create -n pyvslm -c conda-forge python=3.12 numpy scipy matplotlib pyside6 pysoundfile python-sounddevice numba pydantic pyyaml pyinstaller pytest
+conda activate pyvslm
 ```
 
 ## Running the Application
