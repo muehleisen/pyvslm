@@ -36,6 +36,7 @@ ehthumbs.db
 # (Keep this commented out if you want to commit the test files in /tests)
 # *.wav
 # !tests/*.wav  # This would re-include wav files specifically in tests/
+settings.yaml
 
 # --- Temporary / Logs ---
 *.log
