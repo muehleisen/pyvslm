@@ -42,7 +42,7 @@ _PALETTE_OPTIONS = ["plasma", "viridis", "cividis", "inferno", "jet", "coolwarm"
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("VSLM 2.0 — Virtual Sound Level Meter")
+        self.setWindowTitle("PYVSLM 1.0 — Python Virtual Sound Level Meter")
         self.resize(1200, 820)
 
         self.controller = VSLMController()
