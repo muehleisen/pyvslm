@@ -1,174 +1,293 @@
-# ... (Imports unchanged) ...
+"""
+Application controller (MVC middle layer).
+
+Owns the settings, the active file path, and the analysis worker thread.
+Communicates with the GUI exclusively via Qt signals — no GUI imports here.
+"""
+from __future__ import annotations
+
+import time
+import threading
 import traceback
 from pathlib import Path
+
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
 from PySide6.QtCore import QObject, Signal, Slot
-from .settings_manager import SettingsManager, AppSettings
-from .gui.analysis_worker import AnalysisWorker
-from .result_exporter import ResultsExporter
-from .constants import Weighting, ResponseSpeed, LEQ_INTERVAL_MAP
+
+from .settings import AppSettings, SettingsManager
+from .constants import MODE_ID_MAP, AnalysisMode, LEQ_INTERVAL_MAP
+from .gui.worker import AnalysisWorker
+from .dsp import exporter
+
 
 class VSLMController(QObject):
-    # ... (Signals and Init unchanged) ...
-    sig_file_loaded = Signal(object, object)
-    sig_analysis_started = Signal(str)
+    # Emitted after a file is successfully loaded
+    sig_file_loaded = Signal(object, object)   # (Path, soundfile.info)
+    # Analysis lifecycle
+    sig_analysis_started  = Signal()
     sig_analysis_progress = Signal(int)
+    sig_total_blocks      = Signal(int)
     sig_analysis_finished = Signal(list)
-    sig_analysis_error = Signal(str)
+    sig_analysis_error    = Signal(str)
+    # Export / settings
+    sig_export_done    = Signal()
     sig_status_message = Signal(str)
-    sig_export_finished = Signal()
-    sig_total_blocks = Signal(int)
+    # Playback state: "playing" | "paused" | "stopped"
+    sig_playback_state_changed = Signal(str)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.settings_mgr = SettingsManager()
-        self.settings = self.settings_mgr.load()
-        self.filepath: Path | None = None
-        self.start_time: float = 0.0
-        self.end_time: float | None = None
-        self.last_results: list = []
-        self.worker: AnalysisWorker | None = None
-        self.cal_factor = self.settings.calibration_factor
-        self.total_blocks_estimate = 100
+        self._settings_mgr = SettingsManager()
+        self.settings: AppSettings = self._settings_mgr.load()
 
-    # ... (load_file, update_calibration, set_analysis_range unchanged) ...
-    def load_file(self, filepath: str):
+        self.filepath:   Path | None  = None
+        self.start_time: float        = 0.0
+        self.end_time:   float | None = None
+        self.cal_factor: float        = self.settings.calibration_factor
+        self.last_results: list       = []
+        self._worker: AnalysisWorker | None = None
+
+        # Playback state
+        self._play_data:         np.ndarray | None = None
+        self._play_fs:           int               = 0
+        self._play_frame_offset: int               = 0
+        self._play_wall_time:    float             = 0.0
+        self._is_playing:        bool              = False
+        self._is_paused:         bool              = False
+
+    # ------------------------------------------------------------------
+    # File management
+    # ------------------------------------------------------------------
+
+    def load_file(self, filepath: str) -> None:
         path = Path(filepath)
         try:
-            from soundfile import info
-            inf = info(str(path))
-            self.filepath = path
-            self.settings.last_directory = str(path.parent)
-            self.start_time = 0.0
-            self.end_time = inf.duration
-            self.last_results = []
-            self.sig_file_loaded.emit(path, inf)
-            self.sig_status_message.emit("File loaded successfully.")
+            info = sf.info(str(path))
         except Exception as e:
-            self.sig_analysis_error.emit(f"Failed to load file: {e}")
+            self.sig_analysis_error.emit(f"Cannot open file: {e}")
+            return
+        self.filepath  = path
+        self.start_time = 0.0
+        self.end_time   = info.duration
+        self.last_results = []
+        self.settings.last_directory = str(path.parent)
+        self.sig_file_loaded.emit(path, info)
+        self.sig_status_message.emit("File loaded.")
 
-    def update_calibration(self, new_factor: float):
-        self.cal_factor = new_factor
-        self.settings.calibration_factor = new_factor
-        self.sig_status_message.emit(f"Calibration updated: {new_factor:.4f}")
-
-    def set_analysis_range(self, start: float, end: float):
+    def set_analysis_range(self, start: float, end: float) -> None:
         self.start_time = start
-        self.end_time = end
-        self.sig_status_message.emit(f"Analysis range set: {start:.2f}s - {end:.2f}s")
+        self.end_time   = end
+        self.sig_status_message.emit(f"Range: {start:.2f}s – {end:.2f}s")
 
-    def run_analysis(self, mode_id: int):
-        if not self.filepath: return
+    def update_calibration(self, factor: float) -> None:
+        self.cal_factor = factor
+        self.settings.calibration_factor = factor
+        self.sig_status_message.emit(f"Calibration factor: {factor:.4f}")
 
-        is_lp = (mode_id == 0)
-        is_psd = (mode_id == 4)
-        is_spec = (mode_id == 5)
-        
-        do_bands = (mode_id in [2, 3])
-        band_res = 'third' if mode_id == 3 else 'octave'
-        w = self.settings.weighting
-        weighting_val = w.value if hasattr(w, 'value') else w
-        s = self.settings.speed
-        speed_val = s.value if hasattr(s, 'value') else s
-        
-        if self.worker and self.worker.isRunning(): self.worker.stop()
-        
-        calc_block_ms = self.settings.block_size_ms 
-        if is_lp:
-            try:
-                keys = list(LEQ_INTERVAL_MAP.keys())
-                idx = self.settings.lp_interval_index
-                if 0 <= idx < len(keys):
-                    key = keys[idx]
-                    interval_sec = LEQ_INTERVAL_MAP[key][1]
-                    calc_block_ms = interval_sec * 1000.0
-            except Exception as e:
-                print(f"Error setting Lp interval: {e}, using default.")
-                calc_block_ms = 100.0
+    # ------------------------------------------------------------------
+    # Playback
+    # ------------------------------------------------------------------
 
-        psd_nfft = getattr(self.settings, 'psd_nfft', 4096)
-        psd_window = getattr(self.settings, 'psd_window', 'Hanning')
-        spec_nfft = getattr(self.settings, 'spec_nfft', 512)
-        spec_dt = getattr(self.settings, 'spec_dt', 1.0)
-        spec_window = getattr(self.settings, 'spec_window', 'Hamming') # <--- Retrieve Setting
-
-        self.worker = AnalysisWorker(
-            filepath=self.filepath,
-            cal_factor=self.cal_factor,
-            block_size_ms=calc_block_ms,
-            weighting=weighting_val,
-            do_bands=do_bands,
-            band_res=band_res,
-            speed=speed_val,
-            band_order=self.settings.band_filter_order,
-            ref_pressure=self.settings.ref_pressure,
-            mode_is_psd=is_psd,
-            psd_nfft=psd_nfft,
-            psd_window=psd_window,
-            mode_is_spec=is_spec,
-            spec_nfft=spec_nfft,
-            spec_dt=spec_dt,
-            spec_window=spec_window # <--- Pass Setting
-        )
-
-        self.worker.sig_total_blocks.connect(self.sig_total_blocks.emit)
-        self.worker.sig_progress.connect(self.sig_analysis_progress.emit)
-        self.worker.sig_error.connect(self.sig_analysis_error.emit)
-        self.worker.sig_finished.connect(self._on_worker_finished)
-        self.worker.start()
-        self.sig_analysis_started.emit(str(speed_val))
-
-    # ... (Rest unchanged) ...
-    def stop_analysis(self):
-        if self.worker:
-            self.worker.stop()
-            self.worker.wait()
-            self.sig_status_message.emit("Analysis stopped by user.")
-
-    def _on_worker_finished(self, results):
-        if results and isinstance(results[0], dict) and results[0].get('type') in ['psd', 'spectrogram']:
-            filtered = results
-        else:
-            if self.end_time: filtered = [r for r in results if self.start_time <= r['time'] <= self.end_time]
-            else: filtered = results
-        self.last_results = filtered
-        self.sig_analysis_finished.emit(filtered)
-        self.sig_status_message.emit("Analysis Complete.")
-
-    def export_results(self, path: Path, mode_id: int, leq_interval_key):
-        if not self.last_results: return
+    def play_audio(self) -> None:
+        """Play the selected range, or resume from pause position."""
+        if not self.filepath:
+            return
+        if self._is_paused and self._play_data is not None:
+            self._resume_playback()
+            return
         try:
-            w = self.settings.weighting
-            weighting = w.value if hasattr(w, 'value') else w
-            s = self.settings.speed
-            speed = s.value if hasattr(s, 'value') else s
-            dose_std_name = self.settings.current_dose_standard
-            dose_params = self.settings.dose_standards.get(dose_std_name)
-            
-            if mode_id == 1:
-                 ResultsExporter.export_leq(path, self.last_results, self.settings.block_size_ms, leq_interval_key, weighting, dose_params, dose_std_name, self.settings.ref_pressure)
-            elif mode_id == 0:
-                ResultsExporter.export_lp(path, self.last_results, weighting, speed)
-            elif mode_id in [2, 3]:
-                ResultsExporter.export_spectrum(path, self.last_results, weighting, self.settings.ref_pressure)
-            self.sig_export_finished.emit()
-            self.sig_status_message.emit(f"Exported to {path.name}")
+            info = sf.info(str(self.filepath))
+            fs   = info.samplerate
+            start_frame = int(self.start_time * fs)
+            stop_frame  = int(self.end_time * fs) if self.end_time else None
+            if stop_frame is not None and stop_frame <= start_frame:
+                self.sig_status_message.emit("Invalid selection range.")
+                return
+            data, _ = sf.read(str(self.filepath), start=start_frame,
+                               stop=stop_frame, always_2d=True)
         except Exception as e:
-            self.sig_analysis_error.emit(f"Export failed: {str(e)}\n{traceback.format_exc()}")
+            self.sig_analysis_error.emit(f"Playback error: {e}")
+            return
 
-    def save_settings(self, path: Path):
-        self.settings_mgr.save(self.settings, path)
+        self._play_data         = data
+        self._play_fs           = fs
+        self._play_frame_offset = 0
+        self._is_paused         = False
+        sd.stop()
+        sd.play(data, fs, blocking=False)
+        self._play_wall_time = time.monotonic()
+        self._is_playing     = True
+        self.sig_playback_state_changed.emit("playing")
+        end_t = self.end_time or info.duration
+        self.sig_status_message.emit(
+            f"Playing {self.start_time:.2f}s – {end_t:.2f}s…"
+        )
+        threading.Thread(target=self._monitor_playback, daemon=True).start()
+
+    def pause_audio(self) -> None:
+        """Freeze playback; resume position is preserved for Play."""
+        if not self._is_playing:
+            return
+        elapsed = int((time.monotonic() - self._play_wall_time) * self._play_fs)
+        data_len = len(self._play_data) if self._play_data is not None else 0
+        self._play_frame_offset = min(self._play_frame_offset + elapsed, data_len)
+        sd.stop()
+        self._is_playing = False
+        self._is_paused  = True
+        self.sig_playback_state_changed.emit("paused")
+        self.sig_status_message.emit("Paused.")
+
+    def stop_audio(self) -> None:
+        """Stop playback and reset to start of selection."""
+        sd.stop()
+        self._play_data         = None
+        self._play_frame_offset = 0
+        self._is_playing        = False
+        self._is_paused         = False
+        self.sig_playback_state_changed.emit("stopped")
+        self.sig_status_message.emit("Playback stopped.")
+
+    def _resume_playback(self) -> None:
+        remaining = self._play_data[self._play_frame_offset:]
+        if len(remaining) == 0:
+            self.stop_audio()
+            return
+        sd.play(remaining, self._play_fs, blocking=False)
+        self._play_wall_time = time.monotonic()
+        self._is_playing     = True
+        self._is_paused      = False
+        self.sig_playback_state_changed.emit("playing")
+        self.sig_status_message.emit("Resumed…")
+        threading.Thread(target=self._monitor_playback, daemon=True).start()
+
+    def _monitor_playback(self) -> None:
+        """Daemon thread: detect natural end of playback and emit stopped."""
+        sd.wait()
+        if self._is_playing:
+            self._is_playing        = False
+            self._play_frame_offset = 0
+            self._play_data         = None
+            self.sig_playback_state_changed.emit("stopped")
+
+    # ------------------------------------------------------------------
+    # Analysis
+    # ------------------------------------------------------------------
+
+    def run_analysis(self, mode_id: int) -> None:
+        if not self.filepath:
+            return
+        if self._worker and self._worker.isRunning():
+            self._worker.stop()
+            self._worker.wait()
+
+        s = self.settings
+        mode = MODE_ID_MAP[mode_id]
+
+        # For Lp mode the block size comes from the Lp interval selector
+        block_ms = s.block_size_ms
+        if mode == AnalysisMode.LP:
+            keys = list(LEQ_INTERVAL_MAP.keys())
+            if 0 <= s.lp_interval_index < len(keys):
+                _, block_ms = LEQ_INTERVAL_MAP[keys[s.lp_interval_index]]
+                block_ms *= 1000.0  # convert seconds → ms
+
+        self._worker = AnalysisWorker(
+            filepath      = self.filepath,
+            cal_factor    = self.cal_factor,
+            mode          = mode,
+            weighting     = s.weighting,
+            speed         = s.speed,
+            block_size_ms = block_ms,
+            do_bands      = mode in (AnalysisMode.OCTAVE, AnalysisMode.THIRD_OCTAVE),
+            band_res      = "third" if mode == AnalysisMode.THIRD_OCTAVE else "octave",
+            band_order    = s.band_filter_order,
+            ref_pressure  = s.ref_pressure,
+            psd_nfft      = s.psd_nfft,
+            psd_window    = s.psd_window,
+            spec_nfft     = s.spec_nfft,
+            spec_dt       = s.spec_dt,
+            spec_window   = s.spec_window,
+        )
+        self._worker.sig_total_blocks.connect(self.sig_total_blocks.emit)
+        self._worker.sig_progress.connect(self.sig_analysis_progress.emit)
+        self._worker.sig_finished.connect(self._on_worker_finished)
+        self._worker.sig_error.connect(self.sig_analysis_error.emit)
+        self._worker.start()
+        self.sig_analysis_started.emit()
+        self.sig_status_message.emit("Analysing…")
+
+    def stop_analysis(self) -> None:
+        if self._worker:
+            self._worker.stop()
+            self._worker.wait()
+            self.sig_status_message.emit("Analysis stopped.")
+
+    @Slot(list)
+    def _on_worker_finished(self, results: list) -> None:
+        # SPL-mode results: filter to the user-selected time range
+        if results and isinstance(results[0], dict) and results[0].get("type") not in ("psd", "spectrogram"):
+            if self.end_time is not None:
+                results = [r for r in results if self.start_time <= r["time"] <= self.end_time]
+        self.last_results = results
+        self.sig_analysis_finished.emit(results)
+        self.sig_status_message.emit("Analysis complete.")
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+
+    def export_results(self, path: Path, mode_id: int, leq_interval_key) -> None:
+        if not self.last_results:
+            return
+        s    = self.settings
+        mode = MODE_ID_MAP[mode_id]
+        try:
+            match mode:
+                case AnalysisMode.LP:
+                    exporter.export_lp(path, self.last_results, str(s.weighting), str(s.speed))
+                case AnalysisMode.LEQ:
+                    dose_params = s.dose_standards[s.current_dose_standard]
+                    exporter.export_leq(
+                        path, self.last_results, s.block_size_ms,
+                        leq_interval_key, str(s.weighting),
+                        dose_params, s.current_dose_standard, s.ref_pressure,
+                    )
+                case AnalysisMode.OCTAVE | AnalysisMode.THIRD_OCTAVE:
+                    exporter.export_spectrum(path, self.last_results, str(s.weighting), s.ref_pressure)
+                case _:
+                    self.sig_status_message.emit("Export not supported for this mode.")
+                    return
+            self.sig_export_done.emit()
+            self.sig_status_message.emit(f"Exported → {path.name}")
+        except Exception as e:
+            self.sig_analysis_error.emit(f"Export failed:\n{traceback.format_exc()}")
+
+    # ------------------------------------------------------------------
+    # Settings persistence
+    # ------------------------------------------------------------------
+
+    def save_settings(self, path: Path | None = None) -> None:
+        self._settings_mgr.save(self.settings, path)
         self.sig_status_message.emit("Settings saved.")
 
     def load_settings(self, path: Path) -> bool:
-        new_settings = self.settings_mgr.load(path)
-        if new_settings:
-            self.settings = new_settings
-            self.cal_factor = self.settings.calibration_factor
+        new = self._settings_mgr.load(path)
+        if new:
+            self.settings = new
+            self.cal_factor = new.calibration_factor
             return True
         return False
 
-    def shutdown(self):
-        if self.worker and self.worker.isRunning():
-            self.worker.stop()
-            self.worker.wait()
-        self.settings_mgr.save(self.settings)
+    def shutdown(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.stop()
+            self._worker.wait()
+        self._is_playing = False
+        self._is_paused  = False
+        try:
+            sd.stop()
+        except Exception:
+            pass
+        self._settings_mgr.save(self.settings)

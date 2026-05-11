@@ -1,159 +1,217 @@
+#!/usr/bin/env python3
+"""
+Plot ANSI S1.11-2004 octave-band filter responses overlaid on the correct
+Class 1 tolerance bands for the 63 Hz, 1 kHz, and 8 kHz bands.
+
+Tolerance bands use the standard's equation (12) log-linear interpolation
+(from plot_ansi_tolerance_bands.py), converted from normalized frequency /
+attenuation axes to absolute Hz / gain axes used in a frequency response plot.
+
+Run from the repo root:
+    python tests/plot_ansi_filter2.py
+    python tests/plot_ansi_filter2.py --class 0
+    python tests/plot_ansi_filter2.py --class 2
+"""
+
 import sys
-import os
 import argparse
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
 import matplotlib.pyplot as plt
-import scipy.signal as sg
+import matplotlib.patches as mpatches
 
-# --- Path Setup ---
-# Ensure we can import from the 'vslm' package
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.insert(0, parent_dir)
+from vslm.dsp.filters.octave_filters import OctaveFilterBank
 
-from vslm.filters.octave_filters import OctaveFilterBank
-from vslm.constants import BandResolution
+# ---------------------------------------------------------------------------
+# ANSI S1.11-2004 Table 1 — breakpoint normalized frequencies and limits
+# Omega = f / fm (ratio of frequency to band-centre frequency)
+# Attenuation sign convention: positive = attenuated below passband level.
+# ---------------------------------------------------------------------------
+G = 10 ** (3 / 10)   # G = 10^(3/10), the preferred octave base
 
-def get_ansi_mask(fc, filter_class=1):
+TABLE1 = [
+    # (Omega,            min0,   max0,   min1,   max1,   min2,   max2)
+    (G**0,            -0.15,  +0.15,  -0.3,   +0.3,   -0.5,   +0.5),
+    (G**(+1/8),       -0.15,  +0.2,   -0.3,   +0.4,   -0.5,   +0.6),
+    (G**(+1/4),       -0.15,  +0.4,   -0.3,   +0.6,   -0.5,   +0.8),
+    (G**(+3/8),       -0.15,  +1.1,   -0.3,   +1.3,   -0.5,   +1.6),
+    # Just inside the band-edge — upper limit has a vertical drop here
+    (G**(+1/2)*0.9999,-0.15,  +4.5,   -0.3,   +5.0,   -0.5,   +5.5),
+    # At and beyond the band-edge: minimum jumps, maximum -> +inf
+    (G**(+1/2),       +2.3,   np.inf, +2.0,   np.inf, +1.6,   np.inf),
+    (G**(+1),         +18.0,  np.inf, +17.5,  np.inf, +16.5,  np.inf),
+    (G**(+2),         +42.5,  np.inf, +42.0,  np.inf, +41.0,  np.inf),
+    (G**(+3),         +62.0,  np.inf, +61.0,  np.inf, +55.0,  np.inf),
+    (G**(+4),         +75.0,  np.inf, +70.0,  np.inf, +60.0,  np.inf),
+]
+
+CLASS_COLS = {0: (1, 2), 1: (3, 4), 2: (5, 6)}
+
+
+def _build_breakpoints(cls):
+    omegas = np.array([row[0] for row in TABLE1])
+    mc, xc = CLASS_COLS[cls]
+    mins = np.array([row[mc] for row in TABLE1])
+    maxs = np.array([row[xc] for row in TABLE1])
+    return omegas, mins, maxs
+
+
+def _interp_limit(omega_query, omegas_bp, limits_bp):
+    """Equation (12): log-linear interpolation between breakpoints."""
+    results = np.empty_like(omega_query, dtype=float)
+    for i, oq in enumerate(omega_query):
+        idx = np.searchsorted(omegas_bp, oq, side='right') - 1
+        idx = np.clip(idx, 0, len(omegas_bp) - 2)
+        oa, ob = omegas_bp[idx], omegas_bp[idx + 1]
+        la, lb = limits_bp[idx], limits_bp[idx + 1]
+        if np.isinf(lb) or np.isinf(la):
+            results[i] = np.inf
+        elif oa == ob:
+            results[i] = la
+        else:
+            frac = np.log10(oq / oa) / np.log10(ob / oa)
+            results[i] = la + (lb - la) * frac
+    return results
+
+
+def build_tolerance_gain(fc, cls=1, n_points=2000):
     """
-    Returns absolute frequency arrays and transmission gain limit values 
-    for the ANSI S1.11-2004 Octave Band spectral mask.
+    Build upper and lower GAIN limits (dB) vs absolute frequency (Hz) for one
+    band centred at fc.
+
+    Relationship between gain and attenuation:
+      gain = –attenuation
+      upper_gain = –min_attenuation   (less attenuation allowed -> higher gain)
+      lower_gain = –max_attenuation   (more attenuation allowed -> lower gain)
+
+    In the stopband max_attenuation = +inf, so lower_gain = –inf (capped at
+    PLOT_FLOOR for display).
     """
-    # Base-ten system G value for octave ratio
-    G = 10**0.3
+    PLOT_FLOOR = -110.0
+    omegas_bp, mins_bp, maxs_bp = _build_breakpoints(cls)
 
-    # Define normalized frequencies (f/fm) as exponents of G
-    epsilon = 1e-6
-    exponents = np.array([
-        0, 1/8, 1/4, 3/8, 1/2 - epsilon, 1/2, 1, 2, 3, 4, 6
-    ])
+    # Positive omega side: G^0 to G^4
+    omega_pos = np.logspace(np.log10(1.0), np.log10(G**4), n_points)
+    min_pos = _interp_limit(omega_pos, omegas_bp, mins_bp)
+    max_pos = _interp_limit(omega_pos, omegas_bp, maxs_bp)
 
-    # Max attenuation of +infinity in the stopband is represented by a large number (100 dB)
-    inf_db = 100.0
+    # Mirror for negative side (symmetric bandpass)
+    omega_neg = np.flip(1.0 / omega_pos[1:])
+    min_neg   = np.flip(min_pos[1:])
+    max_neg   = np.flip(max_pos[1:])
 
-    # Limits (Minimum Attenuation, Maximum Attenuation) in dB 
-    # Extracted from ANSI S1.11-2004 Table 1
-    limits = {
-        0: {
-            'min': np.array([-0.15, -0.15, -0.15, -0.15, -0.15, 2.3, 18.0, 42.5, 62.0, 75.0, 75.0]),
-            'max': np.array([ 0.15,  0.2,   0.4,   1.1,   4.5,   4.5, inf_db, inf_db, inf_db, inf_db, inf_db])
-        },
-        1: {
-            'min': np.array([-0.3, -0.3, -0.3, -0.3, -0.3, 2.0, 17.5, 42.0, 61.0, 70.0, 70.0]),
-            'max': np.array([ 0.3,  0.4,   0.6,   1.3,   5.0,   5.0, inf_db, inf_db, inf_db, inf_db, inf_db])
-        },
-        2: {
-            'min': np.array([-0.5, -0.5, -0.5, -0.5, -0.5, 1.6, 16.5, 41.0, 55.0, 60.0, 60.0]),
-            'max': np.array([ 0.5,  0.6,   0.8,   1.6,   5.5,   5.5, inf_db, inf_db, inf_db, inf_db, inf_db])
-        }
-    }
+    omega_full = np.concatenate([omega_neg, omega_pos])
+    min_full   = np.concatenate([min_neg,   min_pos])
+    max_full   = np.concatenate([max_neg,   max_pos])
 
-    selected_min = limits[filter_class]['min']
-    selected_max = limits[filter_class]['max']
+    # Convert to absolute Hz
+    f_hz = omega_full * fc
 
-    # Mirror the exponents and limits for the negative exponents (f/fm < 1)
-    neg_exponents = -exponents[::-1]
-    
-    # Combine negative and positive sides (removing the duplicate G^0 point)
-    all_exponents = np.concatenate((neg_exponents[:-1], exponents))
-    all_omega = G ** all_exponents
-    all_min_att = np.concatenate((selected_min[::-1][:-1], selected_min))
-    all_max_att = np.concatenate((selected_max[::-1][:-1], selected_max))
+    # Convert attenuation -> gain, cap infinite values
+    upper_gain = -min_full
+    lower_gain = np.where(np.isinf(max_full), PLOT_FLOOR, -max_full)
 
-    # Convert Normalized Frequency to Absolute Frequency
-    f_absolute = all_omega * fc
-    
-    # Invert Attenuation to Transmission Gain
-    gain_upper_limit = -all_min_att
-    gain_lower_limit = -all_max_att
-
-    return f_absolute, gain_upper_limit, gain_lower_limit
+    return f_hz, lower_gain, upper_gain
 
 
-def plot_octave_response(filter_class=1):
-    print("Initializing Octave Filter Bank...")
-    
-    fs = 48000
-    filter_order = 8 # Ensure you use the updated design_compliant_sos
-    
-    bank = OctaveFilterBank(fs, resolution=BandResolution.OCTAVE, order=filter_order)
-    print(f"Generated {len(bank.frequencies)} bands: {bank.frequencies}")
+def compute_filter_response(bank, fc, fs, n=131072):
+    """Return (freqs_hz, gain_db) for the band nearest fc, normalised to 0 dB at fc."""
+    idx    = np.argmin(np.abs(bank.frequencies - fc))
+    fc_act = bank.frequencies[idx]
 
-    # Use 2^17 samples for high frequency resolution in FFT
-    n_samples = 131072 
-    impulse = np.zeros(n_samples)
-    impulse[0] = 1.0 
-    
+    impulse = np.zeros(n)
+    impulse[0] = 1.0
     bank.initialize_state(np.zeros(1024))
-    output_bands = bank.process_chunk(impulse)
-    freqs = np.fft.rfftfreq(n_samples, d=1/fs)
-    
-    plt.figure(figsize=(14, 9))
-    
-    target_freqs = [63.0, 1000.0, 8000.0]
-    colors = ['r', 'g', 'b']
-    
-    # Standard nominal frequencies from ANSI S1.11-2004 Table A1
-    ansi_nominal_fcs = np.array([16, 31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000])
-    
-    for i, target in enumerate(target_freqs):
-        idx = np.argmin(np.abs(bank.frequencies - target))
-        actual_fc = bank.frequencies[idx]
-        
-        # Snap to closest nominal frequency for the label
-        nom_idx = np.argmin(np.abs(ansi_nominal_fcs - actual_fc))
-        nominal_fc = ansi_nominal_fcs[nom_idx]
-        
-        # Format 31.5 correctly, and format the rest as integers
-        nom_label = "31.5" if nominal_fc == 31.5 else f"{int(nominal_fc)}"
-        
-        # Get response
-        resp = np.fft.rfft(output_bands[:, idx])
-        mag_db = 20 * np.log10(np.abs(resp) + 1e-15)
-        
-        # Normalize to peak
-        peak_idx = np.argmin(np.abs(freqs - actual_fc))
-        ref_level = mag_db[peak_idx]
-        norm_mag_db = mag_db - ref_level
-        
-        col = colors[i % len(colors)]
-        
-        # Plot Filter Response using the nominal label
-        plt.semilogx(freqs, norm_mag_db, color=col, linewidth=2, label=f'Band {nom_label} Hz')
-        
-        # Overlay ANSI Mask (using the exact actual_fc for accurate bounds)
-        mask_f, mask_gain_up, mask_gain_lo = get_ansi_mask(actual_fc, filter_class)
-        
-        lbl_up = f'Class {filter_class} Max Transmission' if i == 0 else None
-        lbl_lo = f'Class {filter_class} Min Transmission' if i == 0 else None
-        lbl_fill = f'Class {filter_class} Tolerance Region' if i == 0 else None
-        
-        # Shade the region between the bounds
-        plt.fill_between(mask_f, mask_gain_lo, mask_gain_up, color='gray', alpha=0.15, label=lbl_fill)
-            
-        plt.plot(mask_f, mask_gain_up, 'k--', linewidth=1.5, label=lbl_up, alpha=0.8)
-        plt.plot(mask_f, mask_gain_lo, 'k-.', linewidth=1.5, label=lbl_lo, alpha=0.8)
-        
-        # Update text annotation to use the nominal label
-        plt.text(actual_fc, 5.0, f"{nom_label}Hz", ha='center', color=col, fontweight='bold')
+    output = bank.process_chunk(impulse)
 
-    # Formatting
-    plt.title(f"Octave Filter Bank Response vs ANSI S1.11-2004 Class {filter_class} Limits\n(Fs={fs} Hz, Order={filter_order})", fontsize=14)
-    plt.xlabel("Frequency (Hz)", fontsize=12)
-    plt.ylabel("Normalized Transmission (dB)", fontsize=12)
-    plt.grid(True, which='both', alpha=0.3, linestyle='--')
-    
-    plt.xlim(10, 24000)
-    plt.ylim(-100, 10)
-    
-    plt.legend(loc='lower center', ncol=3)
+    freqs  = np.fft.rfftfreq(n, d=1.0 / fs)
+    resp   = np.fft.rfft(output[:, idx])
+    mag_db = 20 * np.log10(np.abs(resp) + 1e-15)
+    mag_db -= mag_db[np.argmin(np.abs(freqs - fc_act))]
+
+    return freqs, mag_db, fc_act
+
+
+def plot(filter_class=1, fs=48000, order=12):
+    bank = OctaveFilterBank(fs, resolution="octave", order=order)
+    print(f"Band centre frequencies: {bank.frequencies}")
+
+    target_bands = [63.0, 1000.0, 8000.0]
+    band_colors  = ["tab:red", "tab:green", "tab:blue"]
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    for color, target in zip(band_colors, target_bands):
+        # --- tolerance band for this centre frequency ---
+        f_tol, lo_gain, hi_gain = build_tolerance_gain(target, cls=filter_class)
+
+        # Restrict to the plotted frequency range
+        mask = (f_tol >= 10.0) & (f_tol <= fs / 2)
+        f_tol   = f_tol[mask]
+        lo_gain = lo_gain[mask]
+        hi_gain = hi_gain[mask]
+
+        ax.fill_between(f_tol, lo_gain, hi_gain,
+                        color=color, alpha=0.18, linewidth=0)
+        ax.plot(f_tol, hi_gain, color=color, linewidth=1.0,
+                linestyle="--", alpha=0.7)
+        ax.plot(f_tol, lo_gain, color=color, linewidth=1.0,
+                linestyle="--", alpha=0.7)
+
+        # --- actual filter response ---
+        freqs, mag_db, fc_act = compute_filter_response(bank, target, fs)
+        ax.semilogx(freqs, mag_db, color=color, linewidth=2.0,
+                    label=f"{target:.0f} Hz")
+
+        ax.text(fc_act, 2.5, f"{target:.0f} Hz", ha="center",
+                color=color, fontweight="bold", fontsize=9)
+
+    # Reference lines
+    ax.axhline(0,   color="black", linewidth=0.6, linestyle=":", alpha=0.4)
+    floor_db = {0: -75, 1: -70, 2: -60}[filter_class]
+    ax.axhline(floor_db, color="dimgray", linewidth=1.0, linestyle="-", alpha=0.6,
+               label=f"Class {filter_class} stopband floor ({-floor_db} dB)")
+
+    # Legend: combine filter lines + one shaded patch per class
+    handles, _ = ax.get_legend_handles_labels()
+    tol_patch  = mpatches.Patch(
+        facecolor="gray", alpha=0.35, edgecolor="gray",
+        linewidth=1.0, linestyle="--",
+        label=f"Class {filter_class} tolerance band",
+    )
+    ax.legend(handles=handles + [tol_patch], loc="lower center",
+              ncol=3, fontsize=9, framealpha=0.85)
+
+    ax.set_xscale("log")
+    ax.set_title(
+        f"Octave Filter Bank — ANSI S1.11-2004 Class {filter_class} Tolerance Bands\n"
+        f"(Fs = {fs} Hz, filter order = {order})",
+        fontsize=13, fontweight="bold",
+    )
+    ax.set_xlabel("Frequency (Hz)", fontsize=11)
+    ax.set_ylabel("Gain (dB)", fontsize=11)
+    ax.set_xlim(10, fs / 2)
+    ax.set_ylim(-110, 10)
+    ax.grid(True, which="both", linestyle="--", alpha=0.35)
+    ax.grid(True, which="major", linestyle="-",  alpha=0.20)
+
     plt.tight_layout()
     plt.show()
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot Octave-Band Filter Responses against ANSI S1.11-2004 Limits.")
-    parser.add_argument('--class', dest='filter_class', type=int, choices=[0, 1, 2], default=1,
-                        help="Filter accuracy class to plot (0, 1, or 2). Default is 1.")
+    parser = argparse.ArgumentParser(
+        description="Plot octave filter responses vs ANSI S1.11-2004 tolerance bands.",
+    )
+    parser.add_argument("--class", dest="filter_class", default="1",
+                        choices=["0", "1", "2"],
+                        help="Filter class (default: 1)")
+    parser.add_argument("--fs",    type=int, default=48000,
+                        help="Sample rate in Hz (default: 48000)")
+    parser.add_argument("--order", type=int, default=8,
+                        help="Filter order (default: 8)")
     args = parser.parse_args()
 
-    plot_octave_response(filter_class=args.filter_class)
+    plot(filter_class=int(args.filter_class), fs=args.fs, order=args.order)
