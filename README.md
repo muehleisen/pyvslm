@@ -14,12 +14,13 @@ A Python implementation of a virtual sound level meter (VSLM) for post-processin
 ## Environment Setup
 
 ```bash
-conda create -n vslm_env -c conda-forge \
+
+conda create -n pyvslm -c conda-forge \
     python=3.12 numpy scipy matplotlib pyside6 \
     pysoundfile python-sounddevice numba \
     pydantic pyyaml pyinstaller pytest
 
-conda activate vslm_env
+conda activate pyvslm
 ```
 
 ---
@@ -124,4 +125,4 @@ tests/
 
 ## Settings
 
-Application settings are saved automatically to `~/.vslm_settings.yaml` on exit and restored on next launch.  You can also save and load named settings files via **File → Settings**.
+Application settings are saved automatically to `settings.yaml` on exit and restored on next launch.  You can also save and load named settings files via **File → Settings**.
